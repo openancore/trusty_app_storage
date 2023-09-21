@@ -103,6 +103,7 @@ MODULE_LIBRARY_DEPS := \
 	trusty/user/base/lib/hwkey \
 	trusty/user/base/lib/libc-trusty \
 	trusty/user/base/lib/system_state \
+	trusty/user/base/lib/tipc \
 	external/boringssl \
 
 ifeq (true,$(call TOBOOL,$(STORAGE_ENABLE_ERROR_REPORTING)))

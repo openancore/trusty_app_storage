@@ -13,8 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#define TLOG_TAG "secure-storage"
+
+#include <stdint.h>
+#include <stdlib.h>
 
 #include <interface/storage/storage.h>
+#include <lib/tipc/tipc.h>
+#include <lk/err_ptr.h>
+#include <trusty_log.h>
 
 #include "block_cache.h"
 #include "crypt.h"
@@ -28,21 +35,25 @@ int main(void) {
     struct ipc_port_context ctx = {
             .ops = {.on_connect = proxy_connect},
     };
+    uint32_t acl_flags = IPC_PORT_ALLOW_TA_CONNECT | IPC_PORT_ALLOW_NS_CONNECT;
 
     crypt_init();
     block_cache_init();
 
-    int rc = ipc_port_create(
-            &ctx, STORAGE_DISK_PROXY_PORT, 1, STORAGE_MAX_BUFFER_SIZE,
-            IPC_PORT_ALLOW_TA_CONNECT | IPC_PORT_ALLOW_NS_CONNECT);
+    struct tipc_hset* hset = tipc_hset_create();
+    if (IS_ERR(hset)) {
+        TLOGE("Failed to create handle set (%d)\n", PTR_ERR(hset));
+        return EXIT_FAILURE;
+    }
 
+    int rc = ipc_port_create(hset, &ctx, STORAGE_DISK_PROXY_PORT, 1,
+                             STORAGE_MAX_BUFFER_SIZE, acl_flags);
     if (rc < 0) {
         SS_ERR("fatal: unable to initialize proxy endpoint (%d)\n", rc);
         return rc;
     }
 
-    ipc_loop();
-
+    rc = tipc_run_event_loop(hset);
     ipc_port_destroy(&ctx);
-    return 0;
+    return rc;
 }
