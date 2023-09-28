@@ -13,8 +13,8 @@
 # limitations under the License.
 
 # This file lists userspace tests
-
 [
+    porttest("com.android.trusty.rust.storage_unittest_aidl.test", timeout=(60 * 30)),
     # userspace tests using storage available at early boot
     needs(
         [

@@ -1,0 +1,9 @@
+{
+    "app_name": "storage_unittest_aidl_lib",
+    "uuid": "c0ee7860-b88c-4903-ae0f-4f3e2c8a5638",
+    "min_heap": 65536,
+    "min_stack": 32768,
+    "mgmt_flags": {
+        "non_critical_app": true
+    }
+}
