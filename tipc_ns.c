@@ -119,7 +119,20 @@ int rpmb_send(void* handle_,
         return rc;
     }
 
-    return check_response(STORAGE_RPMB_SEND, &msg, rc);
+    size_t bytes_read = (size_t)rc;
+
+    rc = check_response(STORAGE_RPMB_SEND, &msg, bytes_read);
+    if (rc != NO_ERROR) {
+        return rc;
+    }
+
+    if (bytes_read != sizeof(msg) + read_size) {
+        SS_ERR("%s: rpmb send failed, invalid response size (%zu !=  %zu + %zu)\n",
+               __func__, bytes_read, sizeof(msg), read_size);
+        return ERR_NOT_VALID;
+    }
+
+    return NO_ERROR;
 }
 
 int ns_open_file(handle_t ipc_handle,
