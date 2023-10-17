@@ -25,5 +25,4 @@
  * scudo config header.
  */
 
-#include "wrappers_c.cpp"
 #include "wrappers_cpp.cpp"
