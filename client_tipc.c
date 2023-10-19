@@ -181,7 +181,7 @@ static enum storage_err session_set_files_count(
     }
     session->files_count = files_count;
 
-    SS_INFO("%s: new file table size, 0x%x\n", __func__, files_count);
+    SS_INFO("%s: new file table size, 0x%zx\n", __func__, files_count);
 
     return STORAGE_NO_ERROR;
 }
@@ -240,7 +240,7 @@ static enum storage_err create_file_handle(
 
     session->files[handle] = file;
 
-    SS_INFO("%s: created file handle 0x%x\n", __func__, handle);
+    SS_INFO("%s: created file handle 0x%" PRIx32 "\n", __func__, handle);
     *handlep = handle;
     *file_p = file;
     return STORAGE_NO_ERROR;
@@ -249,17 +249,17 @@ static enum storage_err create_file_handle(
 static void free_file_handle(struct storage_client_session* session,
                              uint32_t handle) {
     if (handle >= session->files_count) {
-        SS_ERR("%s: invalid handle, 0x%x\n", __func__, handle);
+        SS_ERR("%s: invalid handle, 0x%" PRIx32 "\n", __func__, handle);
         return;
     }
     if (session->files[handle] == NULL) {
-        SS_ERR("%s: closed handle, 0x%x\n", __func__, handle);
+        SS_ERR("%s: closed handle, 0x%" PRIx32 "\n", __func__, handle);
         return;
     }
     free(session->files[handle]);
     session->files[handle] = NULL;
 
-    SS_INFO("%s: deleted file handle 0x%x\n", __func__, handle);
+    SS_INFO("%s: deleted file handle 0x%" PRIx32 "\n", __func__, handle);
 
     session_shrink_files(session);
 }
@@ -269,12 +269,12 @@ static struct file_handle* get_file_handle(
         uint32_t handle) {
     struct file_handle* file;
     if (handle >= session->files_count) {
-        SS_ERR("%s: invalid handle, 0x%x\n", __func__, handle);
+        SS_ERR("%s: invalid handle, 0x%" PRIx32 "\n", __func__, handle);
         return NULL;
     }
     file = session->files[handle];
     if (!file) {
-        SS_ERR("%s: closed handle, 0x%x\n", __func__, handle);
+        SS_ERR("%s: closed handle, 0x%" PRIx32 "\n", __func__, handle);
         return NULL;
     }
     return file;
@@ -299,7 +299,7 @@ static enum storage_err storage_file_delete(
 
     flags = req->flags;
     if ((flags & ~STORAGE_FILE_DELETE_MASK) != 0) {
-        SS_ERR("invalid delete flags 0x%x\n", flags);
+        SS_ERR("invalid delete flags 0x%" PRIx32 "\n", flags);
         return STORAGE_ERR_NOT_VALID;
     }
 
@@ -394,7 +394,7 @@ static enum storage_err storage_file_move(
 
     flags = req->flags;
     if ((flags & ~STORAGE_FILE_MOVE_MASK) != 0) {
-        SS_ERR("invalid move flags 0x%x\n", flags);
+        SS_ERR("invalid move flags 0x%" PRIx32 "\n", flags);
         return STORAGE_ERR_NOT_VALID;
     }
 
@@ -512,7 +512,7 @@ static int storage_file_open(struct storage_msg* msg,
 
     flags = req->flags;
     if ((flags & ~STORAGE_FILE_OPEN_MASK) != 0) {
-        SS_ERR("%s: invalid flags 0x%x\n", __func__, flags);
+        SS_ERR("%s: invalid flags 0x%" PRIx32 "\n", __func__, flags);
         result = STORAGE_ERR_NOT_VALID;
         goto err_invalid_mask;
     }
@@ -532,7 +532,7 @@ static int storage_file_open(struct storage_msg* msg,
         goto err_get_path;
     }
 
-    SS_INFO("%s: path %s flags 0x%x\n", __func__, path_buf, flags);
+    SS_INFO("%s: path %s flags 0x%" PRIx32 "\n", __func__, path_buf, flags);
 
     SS_INFO("%s: call create_file_handle\n", __func__);
     /* alloc file info struct */
@@ -659,15 +659,16 @@ static int storage_file_read(struct storage_msg* msg,
 
     file = get_file_handle(session, req->handle);
     if (!file) {
-        SS_ERR("%s: invalid file handle (%d)\n", __func__, req->handle);
+        SS_ERR("%s: invalid file handle (%" PRIx32 ")\n", __func__,
+               req->handle);
         result = STORAGE_ERR_NOT_VALID;
         goto err_invalid_input;
     }
 
     buflen = req->size;
     if (buflen > STORAGE_MAX_BUFFER_SIZE - sizeof(*msg)) {
-        SS_ERR("can't read more than %d bytes, requested %zu\n",
-               STORAGE_MAX_BUFFER_SIZE, buflen);
+        SS_ERR("can't read more than %zu bytes, requested %zu\n",
+               STORAGE_MAX_BUFFER_SIZE - sizeof(*msg), buflen);
         result = STORAGE_ERR_NOT_VALID;
         goto err_invalid_input;
     }
@@ -691,7 +692,7 @@ static int storage_file_read(struct storage_msg* msg,
     }
     buflen = bytes_left; /* save to return it to caller */
 
-    SS_INFO("%s: start 0x%x cnt %d\n", __func__, offset, bytes_left);
+    SS_INFO("%s: start 0x%" PRIx64 " cnt %zu\n", __func__, offset, bytes_left);
 
     result = STORAGE_NO_ERROR;
     while (bytes_left) {
@@ -790,7 +791,8 @@ static enum storage_err storage_file_write(
 
     file = get_file_handle(session, req->handle);
     if (!file) {
-        SS_ERR("%s: invalid file handle (%d)\n", __func__, req->handle);
+        SS_ERR("%s: invalid file handle (%" PRIx32 ")\n", __func__,
+               req->handle);
         return STORAGE_ERR_NOT_VALID;
     }
 
@@ -829,7 +831,7 @@ static enum storage_err storage_file_write(
                              &block_data_ref);
 
 #if TLOG_LVL >= TLOG_LVL_DEBUG
-        SS_INFO("%s: bufp %p offset 0x%" PRIx64 " len 0x%x\n", __func__, bufp,
+        SS_INFO("%s: bufp %p offset 0x%" PRIx64 " len 0x%zx\n", __func__, bufp,
                 offset, len);
 #endif
         bytes_left -= len;
@@ -964,7 +966,8 @@ static int storage_file_list(struct storage_msg* msg,
     last_state = req->flags & STORAGE_FILE_LIST_STATE_MASK;
 
     if (last_state == STORAGE_FILE_LIST_END) {
-        SS_ERR("%s: invalid request state (%d)\n", __func__, last_state);
+        SS_ERR("%s: invalid request state (0x%" PRIx8 ")\n", __func__,
+               last_state);
         result = STORAGE_ERR_NOT_VALID;
         goto err_invalid_state;
     }
@@ -1042,7 +1045,8 @@ static int storage_file_get_size(struct storage_msg* msg,
 
     file = get_file_handle(session, req->handle);
     if (!file) {
-        SS_ERR("%s: invalid file handle (%d)\n", __func__, req->handle);
+        SS_ERR("%s: invalid file handle (%" PRIx32 ")\n", __func__,
+               req->handle);
         result = STORAGE_ERR_NOT_VALID;
         goto err_invalid_input;
     }
@@ -1079,7 +1083,8 @@ static enum storage_err storage_file_set_size(
 
     file = get_file_handle(session, req->handle);
     if (!file) {
-        SS_ERR("%s: invalid file handle (%d)\n", __func__, req->handle);
+        SS_ERR("%s: invalid file handle (%" PRIx32 ")\n", __func__,
+               req->handle);
         return STORAGE_ERR_NOT_VALID;
     }
 
@@ -1329,7 +1334,7 @@ static int client_handle_msg(struct ipc_channel_context* ctx,
         result = storage_file_set_size(msg, payload, payload_len, session);
         break;
     default:
-        SS_ERR("%s: unsupported command 0x%x\n", __func__, msg->cmd);
+        SS_ERR("%s: unsupported command 0x%" PRIx32 "\n", __func__, msg->cmd);
         result = STORAGE_ERR_UNIMPLEMENTED;
         break;
     }
