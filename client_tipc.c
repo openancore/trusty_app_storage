@@ -540,57 +540,41 @@ static enum storage_err storage_file_close(
     return STORAGE_NO_ERROR;
 }
 
-static int storage_file_read(struct storage_msg* msg,
-                             struct storage_file_read_req* req,
-                             size_t req_size,
-                             struct storage_tipc_client_session* tipc_session) {
-    struct storage_client_session* session = &tipc_session->session;
-    enum storage_err result = STORAGE_NO_ERROR;
-    void* bufp = NULL;
+static enum storage_err storage_file_read(
+        struct storage_client_session* session,
+        uint32_t handle,
+        uint32_t size,
+        uint64_t offset,
+        uint8_t* resp,
+        size_t* resp_len) {
+    void* bufp = resp;
     size_t buflen;
     size_t bytes_left, len;
-    uint64_t offset;
     struct file_handle* file;
-    void* out = NULL;
-    size_t out_size = 0;
     size_t block_size = get_file_block_size(session->tr.fs);
     data_block_t block_num;
     const uint8_t* block_data;
     struct obj_ref block_data_ref = OBJ_REF_INITIAL_VALUE(block_data_ref);
     size_t block_offset;
 
-    if (req_size < sizeof(*req)) {
-        SS_ERR("%s: invalid request size (%zu)\n", __func__, req_size);
-        result = STORAGE_ERR_NOT_VALID;
-        goto err_invalid_input;
-    }
-
-    file = get_file_handle(session, req->handle);
+    file = get_file_handle(session, handle);
     if (!file) {
-        SS_ERR("%s: invalid file handle (%" PRIx32 ")\n", __func__,
-               req->handle);
-        result = STORAGE_ERR_NOT_VALID;
-        goto err_invalid_input;
+        SS_ERR("%s: invalid file handle (%" PRIx32 ")\n", __func__, handle);
+        return STORAGE_ERR_NOT_VALID;
     }
 
-    buflen = req->size;
-    if (buflen > STORAGE_MAX_BUFFER_SIZE - sizeof(*msg)) {
-        SS_ERR("can't read more than %zu bytes, requested %zu\n",
-               STORAGE_MAX_BUFFER_SIZE - sizeof(*msg), buflen);
-        result = STORAGE_ERR_NOT_VALID;
-        goto err_invalid_input;
+    buflen = size;
+    if (buflen > *resp_len) {
+        SS_ERR("can't read more than %zu bytes, requested %zu\n", *resp_len,
+               buflen);
+        return STORAGE_ERR_NOT_VALID;
     }
 
-    offset = req->offset;
     if (offset > file->size) {
         SS_ERR("can't read past end of file (%" PRIu64 " > %" PRIu64 ")\n",
                offset, file->size);
-        result = STORAGE_ERR_NOT_VALID;
-        goto err_invalid_input;
+        return STORAGE_ERR_NOT_VALID;
     }
-
-    // reuse the input buffer
-    bufp = (uint8_t*)(msg + 1);
 
     /* calc number of bytes to read */
     if ((offset + buflen) > file->size) {
@@ -602,7 +586,6 @@ static int storage_file_read(struct storage_msg* msg,
 
     SS_INFO("%s: start 0x%" PRIx64 " cnt %zu\n", __func__, offset, bytes_left);
 
-    result = STORAGE_NO_ERROR;
     while (bytes_left) {
         block_num = offset / block_size;
         block_data =
@@ -614,8 +597,7 @@ static int storage_file_read(struct storage_msg* msg,
         if (!block_data) {
             if (session->tr.failed) {
                 SS_ERR("error reading block %" PRIu64 "\n", block_num);
-                result = STORAGE_ERR_GENERIC;
-                goto err_get_block;
+                return STORAGE_ERR_GENERIC;
             }
             memset(bufp, 0, len);
         } else {
@@ -628,12 +610,8 @@ static int storage_file_read(struct storage_msg* msg,
         bufp += len;
     }
 
-    out = (uint8_t*)(msg + 1);
-    out_size = buflen;
-
-err_get_block:
-err_invalid_input:
-    return send_response(tipc_session, result, msg, out, out_size);
+    *resp_len = buflen;
+    return STORAGE_NO_ERROR;
 }
 
 static enum storage_err storage_create_gap(
@@ -1094,6 +1072,33 @@ static enum storage_err storage_tipc_file_write(
                               extract_storage_op_flags(msg->flags));
 }
 
+static enum storage_err storage_tipc_file_read(
+        struct storage_tipc_client_session* tipc_session,
+        struct storage_msg* msg,
+        struct storage_file_read_req* req,
+        size_t req_size) {
+    if (req_size != sizeof(*req)) {
+        SS_ERR("%s: invalid request size (%zu)\n", __func__, req_size);
+        return send_result(tipc_session, msg, STORAGE_ERR_NOT_VALID);
+    }
+
+    /*
+     * After getting the args out of req, we still need `*msg`, but won't need
+     * the rest of the buffer anymore. We can reuse that space to hold the
+     * response.
+     */
+    uint8_t* resp = (uint8_t*)(msg + 1);
+    size_t resp_len = STORAGE_MAX_BUFFER_SIZE - sizeof(*msg);
+
+    enum storage_err result =
+            storage_file_read(&tipc_session->session, req->handle, req->size,
+                              req->offset, resp, &resp_len);
+    if (result != STORAGE_NO_ERROR) {
+        return send_result(tipc_session, msg, result);
+    }
+    return send_response(tipc_session, result, msg, resp, resp_len);
+}
+
 struct storage_tipc_file_iter_data {
     char resp_buf[1024];
     size_t buf_used;
@@ -1391,7 +1396,7 @@ static int client_handle_msg(struct ipc_channel_context* ctx,
         result = storage_tipc_file_write(session, msg, payload, payload_len);
         break;
     case STORAGE_FILE_READ:
-        return storage_file_read(msg, payload, payload_len, tipc_session);
+        return storage_tipc_file_read(tipc_session, msg, payload, payload_len);
     case STORAGE_FILE_LIST:
         return storage_tipc_file_list(tipc_session, msg, payload, payload_len);
     case STORAGE_FILE_GET_SIZE:
