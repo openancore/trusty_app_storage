@@ -86,6 +86,7 @@ MODULE_SRCS := \
 	$(LOCAL_DIR)/block_set.c \
 	$(LOCAL_DIR)/block_tree.c \
 	$(LOCAL_DIR)/checkpoint.c \
+	$(LOCAL_DIR)/client.c \
 	$(LOCAL_DIR)/client_tipc.c \
 	$(LOCAL_DIR)/crypt.c \
 	$(LOCAL_DIR)/error_reporting.c \
