@@ -37,7 +37,7 @@
 #include "file.h"
 #include "ipc.h"
 #include "session.h"
-#include "tipc_limits.h"
+#include "storage_limits.h"
 
 /* macros to help manage debug output */
 #define SS_ERR(args...) fprintf(stderr, "ss: " args)
@@ -329,6 +329,29 @@ static enum storage_err ensure_active_transaction(
         transaction_activate(&session->tr);
     }
     return STORAGE_NO_ERROR;
+}
+
+static void storage_client_session_init(struct storage_client_session* session,
+                                        struct fs* fs,
+                                        const uuid_t* peer) {
+    session->magic = STORAGE_CLIENT_SESSION_MAGIC;
+    session->files = NULL;
+    session->files_count = 0;
+
+    transaction_init(&session->tr, fs, false);
+
+    /* cache identity information */
+    memcpy(&session->uuid, peer, sizeof(*peer));
+}
+
+static void storage_client_session_destroy(
+        struct storage_client_session* session) {
+    if (list_in_list(&session->tr.allocated.node) && !session->tr.failed) {
+        /* discard partial transaction */
+        transaction_fail(&session->tr);
+    }
+    session_close_all_files(session);
+    transaction_free(&session->tr);
 }
 
 /* abort transaction and clear sticky transaction error */
@@ -1392,32 +1415,18 @@ static struct ipc_channel_context* client_connect(
 
     struct storage_client_session* client_session =
             &client_tipc_session->session;
-    client_session->magic = STORAGE_CLIENT_SESSION_MAGIC;
-    client_session->files = NULL;
-    client_session->files_count = 0;
-
-    transaction_init(&client_session->tr, client_port_context->tr_state, false);
-
-    /* cache identity information */
-    memcpy(&client_session->uuid, peer_uuid, sizeof(*peer_uuid));
+    storage_client_session_init(client_session, client_port_context->tr_state,
+                                peer_uuid);
 
     client_channel_ops_init(&client_tipc_session->chan_ctx.ops);
     return &client_tipc_session->chan_ctx;
 }
 
 static void client_disconnect(struct ipc_channel_context* context) {
-    struct storage_tipc_client_session* tipc_session;
-    struct storage_client_session* session;
+    struct storage_tipc_client_session* tipc_session =
+            chan_context_to_client_session(context);
 
-    tipc_session = chan_context_to_client_session(context);
-    session = &tipc_session->session;
-
-    if (list_in_list(&session->tr.allocated.node) && !session->tr.failed) {
-        transaction_fail(&session->tr); /* discard partial transaction */
-    }
-    session_close_all_files(session);
-    transaction_free(&session->tr);
-
+    storage_client_session_destroy(&tipc_session->session);
     OPENSSL_cleanse(tipc_session, sizeof(struct storage_tipc_client_session));
     free(tipc_session);
 }
