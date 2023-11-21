@@ -39,6 +39,12 @@ MODULE_CPPFLAGS += \
 	-fno-exceptions \
 	-nostdinc++ \
 
+# Set the default options to Trusty-specific values:
+#   - allocation_ring_buffer_size=0
+#   	Limit the ring buffer size to 0 on Trusty (see aosp/2395872)
+MODULE_COMPILEFLAGS += \
+	-DSCUDO_DEFAULT_OPTIONS="allocation_ring_buffer_size=0"
+
 # scudo should be freestanding, but the rest of the app should not be.
 MODULE_COMPILEFLAGS += -ffreestanding
 
