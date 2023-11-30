@@ -1034,7 +1034,7 @@ static void block_put_dirty_discard_test(struct transaction* tr) {
 }
 
 static void open_test_file_etc(struct transaction* tr,
-                               struct file_handle* file,
+                               struct storage_file_handle* file,
                                const char* path,
                                enum file_create_mode create,
                                enum file_op_result expected_result) {
@@ -1050,7 +1050,7 @@ static void open_test_file_etc(struct transaction* tr,
 }
 
 static void open_test_file(struct transaction* tr,
-                           struct file_handle* file,
+                           struct storage_file_handle* file,
                            const char* path,
                            enum file_create_mode create) {
     open_test_file_etc(tr, file, path, create, FILE_OP_SUCCESS);
@@ -1066,7 +1066,7 @@ static void file_allocate_all_test(struct transaction* master_tr,
     unsigned int j;
     unsigned int done;
     unsigned int count;
-    struct file_handle file[tr_count];
+    struct storage_file_handle file[tr_count];
     data_block_t file_size[tr_count];
     struct transaction tr[tr_count];
     int written_count[tr_count];
@@ -1144,7 +1144,7 @@ static void file_allocate_all_test(struct transaction* master_tr,
 static void file_create_all_test(struct transaction* tr) {
     int i;
     char path[4 + 8 + 1];
-    struct file_handle file;
+    struct storage_file_handle file;
 
     enum file_op_result result;
     for (i = 0;; i++) {
@@ -1164,7 +1164,7 @@ static void file_create_all_test(struct transaction* tr) {
 
 /* run tests on already open file */
 static void file_test_open(struct transaction* tr,
-                           struct file_handle* file,
+                           struct storage_file_handle* file,
                            int allocate,
                            int read,
                            int free,
@@ -1258,7 +1258,7 @@ static void file_move_expect(struct transaction* tr,
                              const char* dest_path,
                              enum file_create_mode dest_create,
                              enum file_op_result expected_result) {
-    struct file_handle file;
+    struct storage_file_handle file;
     enum file_op_result res;
 
     assert(!tr->failed);
@@ -1292,7 +1292,7 @@ static void file_test_etc(struct transaction* tr,
                           bool delete,
                           int id) {
     enum file_op_result delete_res;
-    struct file_handle file;
+    struct storage_file_handle file;
 
     open_test_file(tr, &file, path, create);
 
@@ -1344,7 +1344,7 @@ static void file_test_split_tr(struct transaction* tr,
                                int id) {
     enum file_op_result delete_res;
     int i;
-    struct file_handle file[open_count];
+    struct storage_file_handle file[open_count];
 
     assert(allocate_file_index <= allocate_index);
     assert(allocate_index < open_count);
@@ -1403,8 +1403,8 @@ static void file_test_split_tr(struct transaction* tr,
 
 static void file_read_after_delete_test(struct transaction* tr) {
     const char* path = "test1s";
-    struct file_handle file;
-    struct file_handle file2;
+    struct storage_file_handle file;
+    struct storage_file_handle file2;
     struct obj_ref ref = OBJ_REF_INITIAL_VALUE(ref);
     const void* block_data_ro;
     void* block_data_rw;
@@ -1493,7 +1493,7 @@ static void file_splittr1o4_small_test(struct transaction* tr) {
      */
     file_test_split_tr(tr, "test1s", FILE_OPEN_NO_CREATE, 4, 1, 2, 1, 1, 0, false, 1);
 #else
-    struct file_handle file[2];
+    struct storage_file_handle file[2];
     open_test_file_etc(tr, &file[0], "test1s", FILE_OPEN_NO_CREATE,
                        FILE_OP_SUCCESS);
     open_test_file_etc(tr, &file[1], "test1s", FILE_OPEN_NO_CREATE,
@@ -1647,7 +1647,7 @@ static void file_delete2_test(struct transaction* tr) {
 
 static void file_create2_read_after_commit_test(struct transaction* tr) {
     int i;
-    struct file_handle file[2];
+    struct storage_file_handle file[2];
 
     open_test_file(tr, &file[0], "test1", FILE_OPEN_CREATE_EXCLUSIVE);
     open_test_file(tr, &file[1], "test2", FILE_OPEN_CREATE_EXCLUSIVE);
@@ -2010,7 +2010,7 @@ static void fs_rebuild_with_pending_transaction(struct transaction* tr) {
 
 static void fs_repair_flag(struct transaction* tr) {
     enum file_op_result result;
-    struct file_handle file;
+    struct storage_file_handle file;
 
     /* clear FS to reset repair flag */
     transaction_fail(tr);
@@ -2099,7 +2099,7 @@ static void fs_repair_flag(struct transaction* tr) {
  */
 static void fs_repair_with_alternate(struct transaction* tr) {
     enum file_op_result result;
-    struct file_handle file;
+    struct storage_file_handle file;
 
     /* simulate an operation that requires setting the repair flag */
     file_test(tr, "test_repair_with_alternate", FILE_OPEN_CREATE_EXCLUSIVE,
@@ -2160,7 +2160,7 @@ static void future_fs_version_test(struct transaction* tr) {
     uint16_t* super_rw;
     data_block_t block;
     int ret;
-    struct file_handle file;
+    struct storage_file_handle file;
     enum file_op_result open_result;
 
     /* offset of fs_version field in uint16_t words */
@@ -2293,7 +2293,7 @@ static void unknown_required_flags_test(struct transaction* tr) {
     struct block_device* super_dev = fs->super_dev;
     int ret;
     uint16_t initial_required_flags;
-    struct file_handle file;
+    struct storage_file_handle file;
     enum file_op_result open_result;
 
     /* update when SUPER_BLOCK_REQUIRED_FLAGS_MASK changes in super.c */
@@ -2444,7 +2444,7 @@ static void fs_corruption_helper(struct transaction* tr,
                                  block_selector callback,
                                  unsigned int arg,
                                  bool expect_missing_file) {
-    struct file_handle file;
+    struct storage_file_handle file;
     enum file_op_result result;
     struct fs* fs = tr->fs;
 
@@ -2505,7 +2505,7 @@ static data_block_t select_free_block(struct transaction* tr,
 
 static data_block_t select_data_block(struct transaction* tr,
                                       unsigned int block) {
-    struct file_handle file;
+    struct storage_file_handle file;
     const void* block_data_ro = NULL;
     struct obj_ref ref = OBJ_REF_INITIAL_VALUE(ref);
     data_block_t data_block_num;
@@ -2522,7 +2522,7 @@ static data_block_t select_data_block(struct transaction* tr,
 }
 
 static void create_and_delete(struct transaction* tr, const char* filename) {
-    struct file_handle file;
+    struct storage_file_handle file;
     open_test_file_etc(tr, &file, filename, FILE_OPEN_CREATE_EXCLUSIVE,
                        FILE_OP_SUCCESS);
     transaction_complete(tr);
@@ -2658,7 +2658,7 @@ static void fs_check_free_child_test(struct transaction* tr) {
 }
 
 static void fs_check_sparse_file_test(struct transaction* tr) {
-    struct file_handle file;
+    struct storage_file_handle file;
     int i;
     int* block_data_rw;
     struct obj_ref ref = OBJ_REF_INITIAL_VALUE(ref);
@@ -2714,7 +2714,7 @@ static void fs_corrupt_data_blocks_test(struct transaction* tr) {
 
 static void fs_persist_needs_full_scan_test(struct transaction* tr) {
     const int* block_data_ro;
-    struct file_handle file;
+    struct storage_file_handle file;
     struct obj_ref ref = OBJ_REF_INITIAL_VALUE(ref);
 
     assert(!tr->fs->needs_full_scan);
@@ -2756,7 +2756,7 @@ static void fs_persist_needs_full_scan_test(struct transaction* tr) {
 }
 
 static void fs_recovery_clear_test(struct transaction* tr) {
-    struct file_handle file;
+    struct storage_file_handle file;
     file_test(tr, "recovery", FILE_OPEN_CREATE_EXCLUSIVE, file_test_block_count,
               0, 0, false, 1);
     transaction_complete(tr);
@@ -2861,7 +2861,7 @@ static void fs_auto_checkpoint_test(struct transaction* tr) {
 }
 
 static void fs_recovery_restore_test(struct transaction* tr) {
-    struct file_handle file;
+    struct storage_file_handle file;
     enum file_op_result result;
 
     /* ensure that there is no existing checkpoint */
@@ -2925,7 +2925,7 @@ static void fs_recovery_restore_test(struct transaction* tr) {
 
 /* Attempt to restore the checkpoint again */
 static void fs_recovery_restore_test2(struct transaction* tr) {
-    struct file_handle file;
+    struct storage_file_handle file;
     enum file_op_result result;
 
     /* this file should only be in the checkpoint */
@@ -2978,7 +2978,7 @@ static void fs_recovery_restore_cleanup(struct transaction* tr) {
  */
 
 static void fs_alternate_negative_test(struct transaction* tr) {
-    struct file_handle file;
+    struct storage_file_handle file;
 
     /* Initialize and commit a file to the FS */
     file_test(tr, "main", FILE_OPEN_CREATE_EXCLUSIVE, file_test_block_count, 0,
@@ -3023,7 +3023,7 @@ static void fs_alternate_negative_test(struct transaction* tr) {
  *     Alternate b -> Alternate c -> Main c -> Alternate c
  */
 static void fs_alternate_test(struct transaction* tr) {
-    struct file_handle file;
+    struct storage_file_handle file;
 
     /* Initialize and commit a file to the FS */
     file_test(tr, "main", FILE_OPEN_CREATE_EXCLUSIVE, file_test_block_count, 0,
@@ -3157,7 +3157,7 @@ static void fs_alternate_test(struct transaction* tr) {
  *     -> Main b -> Alternate a -> Alternate c -> Main b
  */
 static void fs_alternate_empty_test(struct transaction* tr) {
-    struct file_handle file;
+    struct storage_file_handle file;
     transaction_fail(tr);
 
     /* clear main fs */
@@ -3281,7 +3281,7 @@ static void fs_alternate_empty_test(struct transaction* tr) {
  */
 static void fs_alternate_recovery_test(struct transaction* tr) {
     data_block_t block;
-    struct file_handle file;
+    struct storage_file_handle file;
     struct fs* fs = tr->fs;
 
     file_test(tr, "recovery_main", FILE_OPEN_CREATE_EXCLUSIVE,
@@ -3411,7 +3411,7 @@ static void fs_alternate_recovery_test(struct transaction* tr) {
 }
 
 static void fs_alternate_init_test(struct transaction* tr) {
-    struct file_handle file;
+    struct storage_file_handle file;
     transaction_fail(tr);
 
     block_test_clear_superblock_reinit(tr, FS_INIT_FLAGS_NONE);

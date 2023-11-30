@@ -245,7 +245,7 @@ int generate_iv(struct iv* iv_out) {
 }
 
 /**
- * encrypt - Encrypt data using AES-128-CTR.
+ * storage_encrypt - Encrypt data using AES-128-CTR.
  * @key:            Key object.
  * @data_in_out:    Data to encrypt.
  * @data_size:      Number of bytes in @data_in_out, but be a multiple of
@@ -254,15 +254,15 @@ int generate_iv(struct iv* iv_out) {
  *
  * Return: 0 on success, -1 if an error was detected.
  */
-int encrypt(const struct key* key,
-            void* data_in_out,
-            size_t data_size,
-            const struct iv* iv_in) {
+int storage_encrypt(const struct key* key,
+                    void* data_in_out,
+                    size_t data_size,
+                    const struct iv* iv_in) {
     return crypt(key, data_in_out, data_size, iv_in, true);
 }
 
 /**
- * encrypt - Decrypt data using AES-128-CTR.
+ * storage_decrypt - Decrypt data using AES-128-CTR.
  * @key:            Key object.
  * @data_in_out:    Data to decrypt.
  * @data_size:      Number of bytes in @data_in_out, but be a multiple of
@@ -271,9 +271,9 @@ int encrypt(const struct key* key,
  *
  * Return: 0 on success, -1 if an error was detected.
  */
-int decrypt(const struct key* key,
-            void* data_in_out,
-            size_t data_size,
-            const struct iv* iv_in) {
+int storage_decrypt(const struct key* key,
+                    void* data_in_out,
+                    size_t data_size,
+                    const struct iv* iv_in) {
     return crypt(key, data_in_out, data_size, iv_in, false);
 }

@@ -24,7 +24,7 @@
 /* SCSC (Storage Client Session Context) */
 #define STORAGE_CLIENT_SESSION_MAGIC 0x53435343
 
-struct file_handle;
+struct storage_file_handle;
 
 /*
  * Structure that tracks state associated with a session.
@@ -33,6 +33,6 @@ struct storage_client_session {
     uint32_t magic;
     struct transaction tr;
     uuid_t uuid;
-    struct file_handle** files;
+    struct storage_file_handle** files;
     size_t files_count;
 };

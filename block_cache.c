@@ -355,7 +355,7 @@ static void block_cache_entry_decrypt(struct block_cache_entry* entry) {
         decrypt_size -= sizeof(*iv);
     }
     stats_timer_start(STATS_FS_READ_BLOCK_DECRYPT);
-    ret = decrypt(entry->key, decrypt_data, decrypt_size, iv);
+    ret = storage_decrypt(entry->key, decrypt_data, decrypt_size, iv);
     stats_timer_stop(STATS_FS_READ_BLOCK_DECRYPT);
     assert(!ret);
 
@@ -404,7 +404,7 @@ static void block_cache_entry_encrypt(struct block_cache_entry* entry) {
     }
 
     stats_timer_start(STATS_FS_WRITE_BLOCK_ENCRYPT);
-    ret = encrypt(entry->key, encrypt_data, encrypt_size, iv);
+    ret = storage_encrypt(entry->key, encrypt_data, encrypt_size, iv);
     stats_timer_stop(STATS_FS_WRITE_BLOCK_ENCRYPT);
     assert(!ret);
     entry->state = BLOCK_ENTRY_DATA_DIRTY_ENCRYPTED;

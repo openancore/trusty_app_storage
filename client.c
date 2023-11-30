@@ -135,7 +135,7 @@ static enum storage_err file_op_result_to_storage_err(
 static enum storage_err session_set_files_count(
         struct storage_client_session* session,
         size_t files_count) {
-    struct file_handle** files;
+    struct storage_file_handle** files;
 
     if (files_count > STORAGE_MAX_OPEN_FILES) {
         SS_ERR("%s: too many open files\n", __func__);
@@ -177,7 +177,7 @@ static void session_shrink_files(struct storage_client_session* session) {
 
 static void session_close_all_files(struct storage_client_session* session) {
     uint32_t f_handle;
-    struct file_handle* file;
+    struct storage_file_handle* file;
 
     for (f_handle = 0; f_handle < session->files_count; f_handle++) {
         file = session->files[f_handle];
@@ -195,10 +195,10 @@ static void session_close_all_files(struct storage_client_session* session) {
 static enum storage_err create_file_handle(
         struct storage_client_session* session,
         uint32_t* handlep,
-        struct file_handle** file_p) {
+        struct storage_file_handle** file_p) {
     enum storage_err result;
     uint32_t handle;
-    struct file_handle* file;
+    struct storage_file_handle* file;
 
     for (handle = 0; handle < session->files_count; handle++)
         if (!session->files[handle])
@@ -242,10 +242,10 @@ static void free_file_handle(struct storage_client_session* session,
     session_shrink_files(session);
 }
 
-static struct file_handle* get_file_handle(
+static struct storage_file_handle* get_file_handle(
         struct storage_client_session* session,
         uint32_t handle) {
-    struct file_handle* file;
+    struct storage_file_handle* file;
     if (handle >= session->files_count) {
         SS_ERR("%s: invalid handle, 0x%" PRIx32 "\n", __func__, handle);
         return NULL;
@@ -413,7 +413,7 @@ enum storage_err storage_file_delete(struct storage_client_session* session,
  * Return: %true if @file matches @path, %false otherwise.
  */
 static bool storage_file_check_name(struct transaction* tr,
-                                    const struct file_handle* file,
+                                    const struct storage_file_handle* file,
                                     const char* path) {
     bool ret;
     const struct file_info* file_info;
@@ -443,9 +443,9 @@ enum storage_err storage_file_move(struct storage_client_session* session,
                                    struct storage_op_flags flags) {
     enum file_op_result open_result;
     enum file_op_result move_result;
-    struct file_handle* file = NULL;
+    struct storage_file_handle* file = NULL;
     char path_buf[FS_PATH_MAX];
-    struct file_handle tmp_file;
+    struct storage_file_handle tmp_file;
 
     enum storage_err result =
             assert_checkpoint_flag_valid(session, flags, __func__);
@@ -541,7 +541,7 @@ enum storage_err storage_file_open(struct storage_client_session* session,
                                    struct storage_op_flags flags,
                                    uint32_t* handle) {
     enum file_op_result open_result;
-    struct file_handle* file = NULL;
+    struct storage_file_handle* file = NULL;
     uint32_t f_handle;
     char path_buf[FS_PATH_MAX];
 
@@ -616,7 +616,7 @@ err_open_file:
 enum storage_err storage_file_close(struct storage_client_session* session,
                                     uint32_t handle,
                                     struct storage_op_flags flags) {
-    struct file_handle* file;
+    struct storage_file_handle* file;
 
     enum storage_err result =
             assert_checkpoint_flag_valid(session, flags, __func__);
@@ -657,7 +657,7 @@ enum storage_err storage_file_read(struct storage_client_session* session,
     void* bufp = resp;
     size_t buflen;
     size_t bytes_left, len;
-    struct file_handle* file;
+    struct storage_file_handle* file;
     size_t block_size = get_file_block_size(session->tr.fs);
     data_block_t block_num;
     const uint8_t* block_data;
@@ -733,7 +733,7 @@ enum storage_err storage_file_read(struct storage_client_session* session,
 
 static enum storage_err storage_create_gap(
         struct storage_client_session* session,
-        struct file_handle* file) {
+        struct storage_file_handle* file) {
     size_t block_size = get_file_block_size(session->tr.fs);
     data_block_t block_num;
     size_t block_offset;
@@ -777,7 +777,7 @@ enum storage_err storage_file_write(struct storage_client_session* session,
                                     size_t data_len,
                                     struct storage_op_flags flags) {
     size_t len;
-    struct file_handle* file;
+    struct storage_file_handle* file;
     size_t block_size = get_file_block_size(session->tr.fs);
     data_block_t block_num;
     uint8_t* block_data;
@@ -1015,7 +1015,7 @@ enum storage_err storage_file_get_size(struct storage_client_session* session,
                                        struct storage_op_flags flags,
                                        uint64_t* size) {
     bool valid;
-    struct file_handle* file;
+    struct storage_file_handle* file;
 
     enum storage_err result =
             assert_checkpoint_flag_valid(session, flags, __func__);
@@ -1045,7 +1045,7 @@ enum storage_err storage_file_set_size(struct storage_client_session* session,
                                        uint32_t handle,
                                        uint64_t new_size,
                                        struct storage_op_flags flags) {
-    struct file_handle* file;
+    struct storage_file_handle* file;
 
     enum storage_err result =
             assert_checkpoint_flag_valid(session, flags, __func__);
