@@ -92,7 +92,7 @@ enum storage_err storage_file_delete(struct storage_client_session* session,
  * conatins its file handle.
  * @src_name: The string containing the name of the ``src`` file. If
  * @src_already_opened is true, this must match the name of the file @handle
- * points to.
+ * points to or be null.
  * @src_name_len: The length of the @src_name.
  * @dst_name: The string containing the name of the file's destination.
  * @dst_name_len: The length of @dst_name.

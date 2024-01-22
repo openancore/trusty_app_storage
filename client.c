@@ -458,7 +458,7 @@ enum storage_err storage_file_move(struct storage_client_session* session,
     }
 
     /* make sure filenames are legal */
-    if (!is_valid_name(src_name, src_name_len)) {
+    if (src_name && !is_valid_name(src_name, src_name_len)) {
         SS_ERR("%s: invalid src filename\n", __func__);
         return STORAGE_ERR_NOT_VALID;
     }
@@ -467,22 +467,30 @@ enum storage_err storage_file_move(struct storage_client_session* session,
         return STORAGE_ERR_NOT_VALID;
     }
 
+    if (!src_name && !src_already_opened) {
+        SS_ERR("%s: src needs to be opened, but no src name provided\n",
+               __func__);
+    }
+
     if (src_already_opened) {
         file = get_file_handle(session, handle);
         if (!file)
             return STORAGE_ERR_NOT_VALID;
     }
 
-    result = get_path(path_buf, sizeof(path_buf), &session->uuid, src_name,
-                      src_name_len);
-    if (result != STORAGE_NO_ERROR) {
-        return result;
+    if (src_name) {
+        result = get_path(path_buf, sizeof(path_buf), &session->uuid, src_name,
+                          src_name_len);
+        if (result != STORAGE_NO_ERROR) {
+            return result;
+        }
     }
 
     SS_INFO("%s: src path %s\n", __func__, path_buf);
 
     if (file) {
-        if (!storage_file_check_name(&session->tr, file, path_buf)) {
+        if (src_name &&
+            !storage_file_check_name(&session->tr, file, path_buf)) {
             return STORAGE_ERR_NOT_VALID;
         }
     } else {
