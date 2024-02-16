@@ -18,10 +18,12 @@
 
 #include <errno.h>
 #include <inttypes.h>
-#include <lib/system_state/system_state.h>
-#include <lk/compiler.h>
 #include <stdint.h>
 #include <string.h>
+
+#include <lib/system_state/system_state.h>
+#include <lib/tipc/tipc.h>
+#include <lk/compiler.h>
 #include <trusty_ipc.h>
 #include <uapi/err.h>
 
@@ -467,7 +469,8 @@ static int check_storage_size(handle_t handle,
     return ret;
 }
 
-int block_device_tipc_init(struct block_device_tipc* state,
+int block_device_tipc_init(struct tipc_hset* hset,
+                           struct block_device_tipc* state,
                            handle_t ipc_handle,
                            const struct key* fs_key,
                            const struct rpmb_key* rpmb_key,
@@ -543,7 +546,7 @@ int block_device_tipc_init(struct block_device_tipc* state,
 
     state->fs_rpmb.tr_state = &state->tr_state_rpmb;
 
-    ret = client_create_port(&state->fs_rpmb.client_ctx,
+    ret = client_create_port(hset, &state->fs_rpmb.client_ctx,
                              STORAGE_CLIENT_TP_PORT);
     if (ret < 0) {
         goto err_fs_rpmb_create_port;
@@ -551,7 +554,7 @@ int block_device_tipc_init(struct block_device_tipc* state,
 
     state->fs_rpmb_boot.tr_state = &state->tr_state_rpmb;
 
-    ret = client_create_port(&state->fs_rpmb_boot.client_ctx,
+    ret = client_create_port(hset, &state->fs_rpmb_boot.client_ctx,
                              STORAGE_CLIENT_TDEA_PORT);
     if (ret < 0) {
         goto err_fs_rpmb_boot_create_port;
@@ -650,7 +653,7 @@ int block_device_tipc_init(struct block_device_tipc* state,
     state->fs_tdp.tr_state = &state->tr_state_rpmb;
 #endif
 
-    ret = client_create_port(&state->fs_tdp.client_ctx,
+    ret = client_create_port(hset, &state->fs_tdp.client_ctx,
                              STORAGE_CLIENT_TDP_PORT);
     if (ret < 0) {
         goto err_fs_rpmb_tdp_create_port;
@@ -686,7 +689,8 @@ int block_device_tipc_init(struct block_device_tipc* state,
         goto err_init_fs_ns_tr_state;
     }
 
-    ret = client_create_port(&state->fs_ns.client_ctx, STORAGE_CLIENT_TD_PORT);
+    ret = client_create_port(hset, &state->fs_ns.client_ctx,
+                             STORAGE_CLIENT_TD_PORT);
     if (ret < 0) {
         goto err_fs_ns_create_port;
     }
@@ -744,7 +748,7 @@ int block_device_tipc_init(struct block_device_tipc* state,
     state->fs_nsp.tr_state = state->fs_tdp.tr_state;
 #endif
 
-    ret = client_create_port(&state->fs_nsp.client_ctx,
+    ret = client_create_port(hset, &state->fs_nsp.client_ctx,
                              STORAGE_CLIENT_NSP_PORT);
     if (ret < 0) {
         goto err_fs_nsp_create_port;

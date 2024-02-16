@@ -17,7 +17,9 @@
 #pragma once
 
 #include <lib/hwkey/hwkey.h>
+#include <lib/tipc/tipc.h>
 #include <trusty_ipc.h>
+
 #include "block_device.h"
 #include "ipc.h"
 #include "tipc_ns.h"
@@ -122,7 +124,8 @@ struct block_device_tipc {
     struct client_port_context fs_ns;
 };
 
-int block_device_tipc_init(struct block_device_tipc* state,
+int block_device_tipc_init(struct tipc_hset* hset,
+                           struct block_device_tipc* state,
                            handle_t ipc_handle,
                            const struct key* fs_key,
                            const struct rpmb_key* rpmb_key,

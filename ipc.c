@@ -15,8 +15,10 @@
  */
 
 #include <assert.h>
-#include <lk/list.h>
 #include <stdlib.h>
+
+#include <lib/tipc/tipc.h>
+#include <lk/list.h>
 #include <trusty_ipc.h>
 #include <trusty_log.h>
 #include <uapi/err.h>
@@ -39,8 +41,8 @@
 static void* msg_buf;
 static size_t msg_buf_size;
 
-static void handle_channel(struct ipc_context* ctx, const struct uevent* ev);
-static void handle_port(struct ipc_context* ctx, const struct uevent* ev);
+static void handle_channel(const uevent_t* ev, void* self);
+static void handle_port(const uevent_t* ev, void* self);
 
 static int maybe_grow_msg_buf(size_t new_max_size) {
     if (new_max_size > msg_buf_size) {
@@ -81,21 +83,12 @@ static bool is_valid_chan_ops(struct ipc_channel_ops* ops) {
     return (ops->on_disconnect != NULL);
 }
 
-static struct ipc_port_context* to_port_context(struct ipc_context* context) {
-    assert(context);
-    return containerof(context, struct ipc_port_context, common);
-}
-
-static struct ipc_channel_context* to_channel_context(
-        struct ipc_context* context) {
-    assert(context);
-    return containerof(context, struct ipc_channel_context, common);
-}
-
 static int do_connect(struct ipc_port_context* ctx, const uevent_t* ev) {
     int rc;
     handle_t chan_handle;
     struct ipc_channel_context* chan_ctx;
+
+    struct tipc_hset* hset = ctx->common.hset;
 
     if (ev->event & IPC_HANDLE_POLL_READY) {
         /* incoming connection: accept it */
@@ -107,7 +100,6 @@ static int do_connect(struct ipc_port_context* ctx, const uevent_t* ev) {
         }
 
         chan_handle = (handle_t)rc;
-
         chan_ctx = ctx->ops.on_connect(ctx, &peer_uuid, chan_handle);
         if (chan_ctx == NULL) {
             TLOGE("%s: failure initializing channel state (%d)\n", __func__,
@@ -118,20 +110,23 @@ static int do_connect(struct ipc_port_context* ctx, const uevent_t* ev) {
 
         assert(is_valid_chan_ops(&chan_ctx->ops));
 
-        chan_ctx->common.evt_handler = handle_channel;
-        chan_ctx->common.handle = chan_handle;
-
-        rc = set_cookie(chan_handle, chan_ctx);
+        chan_ctx->common = (struct ipc_context){
+                .evt_handler = {.proc = handle_channel, .priv = chan_ctx},
+                .hset = hset,
+                .handle = chan_handle,
+        };
+        rc = tipc_hset_add_entry(hset, chan_handle, ~0u,
+                                 &chan_ctx->common.evt_handler);
         if (rc < 0) {
             TLOGE("failed (%d) to set_cookie on chan %d\n", rc, chan_handle);
-            goto err_set_cookie;
+            goto err_add_entry;
         }
         list_add_tail(&ctx->channels, &chan_ctx->node);
     }
 
     return NO_ERROR;
 
-err_set_cookie:
+err_add_entry:
     chan_ctx->ops.on_disconnect(chan_ctx);
 err_on_connect:
     close(chan_handle);
@@ -191,12 +186,13 @@ err_read_msg:
 static void do_disconnect(struct ipc_channel_context* context,
                           const uevent_t* ev) {
     list_delete(&context->node);
+    tipc_hset_remove_entry(context->common.hset, ev->handle);
     context->ops.on_disconnect(context);
     close(ev->handle);
 }
 
-static void handle_port(struct ipc_context* ctx, const struct uevent* ev) {
-    struct ipc_port_context* port_ctx = to_port_context(ctx);
+static void handle_port(const struct uevent* ev, void* self) {
+    struct ipc_port_context* port_ctx = self;
     assert(is_valid_port_ops(&port_ctx->ops));
 
     handle_port_errors(ev);
@@ -204,8 +200,8 @@ static void handle_port(struct ipc_context* ctx, const struct uevent* ev) {
     do_connect(port_ctx, ev);
 }
 
-static void handle_channel(struct ipc_context* ctx, const struct uevent* ev) {
-    struct ipc_channel_context* channel_ctx = to_channel_context(ctx);
+static void handle_channel(const struct uevent* ev, void* self) {
+    struct ipc_channel_context* channel_ctx = self;
     assert(is_valid_chan_ops(&channel_ctx->ops));
 
     handle_chan_errors(ev);
@@ -377,22 +373,8 @@ int sync_ipc_send_msg(handle_t session,
     return read_len;
 }
 
-static void dispatch_event(const uevent_t* ev) {
-    assert(ev);
-
-    if (ev->event == IPC_HANDLE_POLL_NONE) {
-        return;
-    }
-
-    struct ipc_context* context = ev->cookie;
-    assert(context);
-    assert(context->evt_handler);
-    assert(context->handle == ev->handle);
-
-    context->evt_handler(context, ev);
-}
-
-int ipc_port_create(struct ipc_port_context* ctxp,
+int ipc_port_create(struct tipc_hset* hset,
+                    struct ipc_port_context* ctxp,
                     const char* port_name,
                     size_t queue_size,
                     size_t max_buffer_size,
@@ -409,10 +391,15 @@ int ipc_port_create(struct ipc_port_context* ctxp,
     }
 
     handle_t port_handle = (handle_t)rc;
-    rc = set_cookie(port_handle, ctxp);
+    ctxp->common = (struct ipc_context){
+            .evt_handler = {.proc = handle_port, .priv = ctxp},
+            .hset = hset,
+            .handle = port_handle,
+    };
+    rc = tipc_hset_add_entry(hset, port_handle, ~0u, &ctxp->common.evt_handler);
     if (rc < 0) {
-        TLOGE("Failed to set cookie on port %s (%d)\n", port_name, rc);
-        goto err_set_cookie;
+        TLOGE("Failed to add handle on port %s (%d)\n", port_name, rc);
+        goto err_add_entry;
     }
 
     rc = maybe_grow_msg_buf(max_buffer_size);
@@ -422,18 +409,17 @@ int ipc_port_create(struct ipc_port_context* ctxp,
         goto err_grow_msg;
     }
 
-    ctxp->common.handle = port_handle;
-    ctxp->common.evt_handler = handle_port;
     list_initialize(&ctxp->channels);
     return NO_ERROR;
 
-err_set_cookie:
+err_add_entry:
 err_grow_msg:
     close(port_handle);
     return rc;
 }
 
 int ipc_port_destroy(struct ipc_port_context* ctx) {
+    tipc_hset_remove_entry(ctx->common.hset, ctx->common.handle);
     close(ctx->common.handle);
     while (!list_is_empty(&ctx->channels)) {
         struct ipc_channel_context* chan_ctx = list_remove_head_type(
@@ -441,28 +427,9 @@ int ipc_port_destroy(struct ipc_port_context* ctx) {
         assert(chan_ctx);
         handle_t chan_handle = chan_ctx->common.handle;
         TLOGE("client still connected, handle %d\n", chan_handle);
+        tipc_hset_remove_entry(chan_ctx->common.hset, chan_ctx->common.handle);
         chan_ctx->ops.on_disconnect(chan_ctx);
         close(chan_handle);
     }
     return NO_ERROR;
-}
-
-void ipc_loop(void) {
-    int rc;
-    uevent_t event;
-
-    while (true) {
-        event.handle = INVALID_IPC_HANDLE;
-        event.event = 0;
-        event.cookie = NULL;
-        rc = wait_any(&event, INFINITE_TIME);
-        if (rc < 0) {
-            TLOGE("wait_any failed (%d)\n", rc);
-            break;
-        }
-
-        if (rc == NO_ERROR) { /* got an event */
-            dispatch_event(&event);
-        }
-    }
 }

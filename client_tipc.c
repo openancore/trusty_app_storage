@@ -30,6 +30,7 @@
 
 #include <interface/storage/storage.h>
 #include <lib/system_state/system_state.h>
+#include <lib/tipc/tipc.h>
 
 #include "client_session_tipc.h"
 #include "file.h"
@@ -1336,7 +1337,8 @@ static int client_handle_msg(struct ipc_channel_context* ctx,
     return send_result(session, msg, result);
 }
 
-int client_create_port(struct ipc_port_context* client_ctx,
+int client_create_port(struct tipc_hset* hset,
+                       struct ipc_port_context* client_ctx,
                        const char* port_name) {
     int ret;
     uint32_t flags = IPC_PORT_ALLOW_TA_CONNECT;
@@ -1346,8 +1348,8 @@ int client_create_port(struct ipc_port_context* client_ctx,
 
     /* start accepting client connections */
     client_ctx->ops.on_connect = client_connect;
-    ret = ipc_port_create(client_ctx, port_name, 1, STORAGE_MAX_BUFFER_SIZE,
-                          flags);
+    ret = ipc_port_create(hset, client_ctx, port_name, 1,
+                          STORAGE_MAX_BUFFER_SIZE, flags);
     if (ret < 0) {
         SS_ERR("%s: failure initializing client port (%d)\n", __func__, ret);
         return ret;

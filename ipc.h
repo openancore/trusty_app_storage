@@ -18,6 +18,7 @@
 
 #include <stdio.h>
 
+#include <lib/tipc/tipc.h>
 #include <lk/list.h>
 #include <trusty_ipc.h>
 #include <uapi/trusty_uuid.h>
@@ -61,9 +62,6 @@ typedef int (*ipc_msg_handler_t)(struct ipc_channel_context* context,
  */
 typedef void (*ipc_disconnect_handler_t)(struct ipc_channel_context* context);
 
-typedef void (*ipc_evt_handler_t)(struct ipc_context* context,
-                                  const struct uevent* ev);
-
 /**
  * ipc_port_ops
  * @on_connect: required connect handler
@@ -83,7 +81,8 @@ struct ipc_channel_ops {
 };
 
 struct ipc_context {
-    ipc_evt_handler_t evt_handler;
+    struct tipc_event_handler evt_handler;
+    struct tipc_hset* hset;
     handle_t handle;
 };
 
@@ -113,10 +112,10 @@ int sync_ipc_send_msg(handle_t session,
                       struct iovec* rx_iovecs,
                       unsigned int rx_iovec_count);
 
-int ipc_port_create(struct ipc_port_context* contextp,
+int ipc_port_create(struct tipc_hset* hset,
+                    struct ipc_port_context* contextp,
                     const char* port_name,
                     size_t queue_size,
                     size_t max_buffer_size,
                     uint32_t flags);
 int ipc_port_destroy(struct ipc_port_context* context);
-void ipc_loop(void);

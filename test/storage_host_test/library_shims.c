@@ -45,7 +45,14 @@ long hwkey_derive(hwkey_session_t session,
     return NO_ERROR;
 }
 
-int client_create_port(struct ipc_port_context* client_ctx,
+struct tipc_hset* tipc_hset_create() {
+    // block_device_tipc.c only passes this to create_client_port, where
+    // we're ignoring it.
+    return NULL;
+}
+
+int client_create_port(struct tipc_hset* hset,
+                       struct ipc_port_context* client_ctx,
                        const char* port_name) {
     return NO_ERROR;
 }
