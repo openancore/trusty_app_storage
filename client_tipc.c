@@ -919,45 +919,25 @@ err_invalid_input:
     return send_response(tipc_session, result, msg, out, out_size);
 }
 
-static int storage_file_get_size(
-        struct storage_msg* msg,
-        struct storage_file_get_size_req* req,
-        size_t req_size,
-        struct storage_tipc_client_session* tipc_session) {
-    struct storage_client_session* session = &tipc_session->session;
+static enum storage_err storage_file_get_size(
+        struct storage_client_session* session,
+        uint32_t handle,
+        uint64_t* size) {
     bool valid;
     struct file_handle* file;
-    enum storage_err result = STORAGE_NO_ERROR;
-    void* out = NULL;
-    size_t out_size = 0;
 
-    if (req_size != sizeof(*req)) {
-        SS_ERR("%s: inavlid request size (%zu)\n", __func__, req_size);
-        result = STORAGE_ERR_NOT_VALID;
-        goto err_invalid_input;
-    }
-
-    file = get_file_handle(session, req->handle);
+    file = get_file_handle(session, handle);
     if (!file) {
-        SS_ERR("%s: invalid file handle (%" PRIx32 ")\n", __func__,
-               req->handle);
-        result = STORAGE_ERR_NOT_VALID;
-        goto err_invalid_input;
+        SS_ERR("%s: invalid file handle (%" PRIx32 ")\n", __func__, handle);
+        return STORAGE_ERR_NOT_VALID;
     }
 
-    struct storage_file_get_size_resp resp;
-
-    valid = file_get_size(&session->tr, file, &resp.size);
+    valid = file_get_size(&session->tr, file, size);
     if (!valid) {
-        result = STORAGE_ERR_NOT_VALID;
-        goto err_invalid_input;
+        return STORAGE_ERR_NOT_VALID;
     }
 
-    out = &resp;
-    out_size = sizeof(resp);
-
-err_invalid_input:
-    return send_response(tipc_session, result, msg, out, out_size);
+    return STORAGE_NO_ERROR;
 }
 
 static enum storage_err storage_file_set_size(
@@ -1133,6 +1113,25 @@ static enum storage_err storage_tipc_file_write(
     return storage_file_write(session, req->handle, req->offset, req->data,
                               req_size - sizeof(*req),
                               extract_storage_op_flags(msg->flags));
+}
+
+static enum storage_err storage_tipc_file_get_size(
+        struct storage_tipc_client_session* tipc_session,
+        struct storage_msg* msg,
+        struct storage_file_get_size_req* req,
+        size_t req_size) {
+    if (req_size != sizeof(*req)) {
+        SS_ERR("%s: invalid request size (%zu)\n", __func__, req_size);
+        return send_result(tipc_session, msg, STORAGE_ERR_NOT_VALID);
+    }
+
+    struct storage_file_get_size_resp resp;
+    enum storage_err result = storage_file_get_size(&tipc_session->session,
+                                                    req->handle, &resp.size);
+    if (result != STORAGE_NO_ERROR) {
+        return send_result(tipc_session, msg, result);
+    }
+    return send_response(tipc_session, result, msg, &resp, sizeof(resp));
 }
 
 static enum storage_err storage_tipc_file_set_size(
@@ -1361,7 +1360,8 @@ static int client_handle_msg(struct ipc_channel_context* ctx,
     case STORAGE_FILE_LIST:
         return storage_file_list(msg, payload, payload_len, tipc_session);
     case STORAGE_FILE_GET_SIZE:
-        return storage_file_get_size(msg, payload, payload_len, tipc_session);
+        return storage_tipc_file_get_size(tipc_session, msg, payload,
+                                          payload_len);
     case STORAGE_FILE_SET_SIZE:
         result = storage_tipc_file_set_size(session, msg, payload, payload_len);
         break;
