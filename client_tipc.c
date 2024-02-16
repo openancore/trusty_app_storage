@@ -281,32 +281,22 @@ static struct file_handle* get_file_handle(
     return file;
 }
 
+struct storage_op_flags {
+    bool allow_repaired;
+    bool complete_transaction;
+    bool update_checkpoint;
+};
+
 static enum storage_err storage_file_delete(
-        struct storage_msg* msg,
-        struct storage_file_delete_req* req,
-        size_t req_size,
-        struct storage_client_session* session) {
+        struct storage_client_session* session,
+        const char* fname,
+        size_t fname_len,
+        struct storage_op_flags flags) {
     enum file_op_result delete_res;
     enum storage_err result;
-    const char* fname;
-    size_t fname_len;
-    uint32_t flags;
     char path_buf[FS_PATH_MAX];
 
-    if (req_size < sizeof(*req)) {
-        SS_ERR("%s: invalid request size (%zu)\n", __func__, req_size);
-        return STORAGE_ERR_NOT_VALID;
-    }
-
-    flags = req->flags;
-    if ((flags & ~STORAGE_FILE_DELETE_MASK) != 0) {
-        SS_ERR("invalid delete flags 0x%" PRIx32 "\n", flags);
-        return STORAGE_ERR_NOT_VALID;
-    }
-
     /* make sure filename is legal */
-    fname = req->name;
-    fname_len = req_size - sizeof(*req);
     if (!is_valid_name(fname, fname_len)) {
         SS_ERR("%s: invalid filename\n", __func__);
         return STORAGE_ERR_NOT_VALID;
@@ -320,22 +310,18 @@ static enum storage_err storage_file_delete(
 
     SS_INFO("%s: path %s\n", __func__, path_buf);
 
-    delete_res = file_delete(&session->tr, path_buf,
-                             msg->flags & STORAGE_MSG_FLAG_FS_REPAIRED_ACK);
+    delete_res = file_delete(&session->tr, path_buf, flags.allow_repaired);
 
     if (delete_res != FILE_OP_SUCCESS) {
         return file_op_result_to_storage_err(delete_res);
     }
 
-    if (msg->flags & STORAGE_MSG_FLAG_TRANSACT_COMPLETE) {
-        transaction_complete_etc(
-                &session->tr,
-                msg->flags & STORAGE_MSG_FLAG_TRANSACT_CHECKPOINT);
+    if (flags.complete_transaction) {
+        transaction_complete_etc(&session->tr, flags.update_checkpoint);
         if (session->tr.failed) {
             SS_ERR("%s: transaction commit failed\n", __func__);
             return STORAGE_ERR_GENERIC;
         }
-        return STORAGE_NO_ERROR;
     }
 
     return STORAGE_NO_ERROR;
@@ -1128,6 +1114,35 @@ static enum storage_err storage_file_set_size(
     return STORAGE_NO_ERROR;
 }
 
+static struct storage_op_flags extract_storage_op_flags(uint32_t msg_flags) {
+    return (struct storage_op_flags){
+            .allow_repaired = msg_flags & STORAGE_MSG_FLAG_FS_REPAIRED_ACK,
+            .complete_transaction =
+                    msg_flags & STORAGE_MSG_FLAG_TRANSACT_COMPLETE,
+            .update_checkpoint =
+                    msg_flags & STORAGE_MSG_FLAG_TRANSACT_CHECKPOINT,
+    };
+}
+
+static enum storage_err storage_tipc_file_delete(
+        struct storage_client_session* session,
+        struct storage_msg* msg,
+        struct storage_file_delete_req* req,
+        size_t req_size) {
+    if (req_size < sizeof(*req)) {
+        SS_ERR("%s: invalid request size (%zu)\n", __func__, req_size);
+        return STORAGE_ERR_NOT_VALID;
+    }
+
+    if ((req->flags & ~STORAGE_FILE_DELETE_MASK) != 0) {
+        SS_ERR("%s: unexpected flags (0x%" PRIx32 ")\n", __func__, req->flags);
+        return STORAGE_ERR_NOT_VALID;
+    }
+
+    return storage_file_delete(session, req->name, req_size - sizeof(*req),
+                               extract_storage_op_flags(msg->flags));
+}
+
 static struct storage_tipc_client_session* chan_context_to_client_session(
         struct ipc_channel_context* ctx) {
     assert(ctx != NULL);
@@ -1323,7 +1338,7 @@ static int client_handle_msg(struct ipc_channel_context* ctx,
 
     switch (msg->cmd) {
     case STORAGE_FILE_DELETE:
-        result = storage_file_delete(msg, payload, payload_len, session);
+        result = storage_tipc_file_delete(session, msg, payload, payload_len);
         break;
     case STORAGE_FILE_MOVE:
         result = storage_file_move(msg, payload, payload_len, session);
