@@ -714,14 +714,13 @@ static enum storage_err storage_create_gap(
 }
 
 static enum storage_err storage_file_write(
-        struct storage_msg* msg,
-        struct storage_file_write_req* req,
-        size_t req_size,
-        struct storage_client_session* session) {
+        struct storage_client_session* session,
+        uint32_t handle,
+        uint64_t offset,
+        const uint8_t* data,
+        size_t data_len,
+        struct storage_op_flags flags) {
     enum storage_err result = STORAGE_NO_ERROR;
-    const void* bufp = NULL;
-    size_t buflen;
-    uint64_t offset, end_offset, bytes_left;
     size_t len;
     struct file_handle* file;
     size_t block_size = get_file_block_size(session->tr.fs);
@@ -730,19 +729,12 @@ static enum storage_err storage_file_write(
     struct obj_ref block_data_ref = OBJ_REF_INITIAL_VALUE(block_data_ref);
     size_t block_offset;
 
-    if (req_size <= sizeof(*req)) {
-        SS_ERR("%s: invalid request size (%zu)\n", __func__, req_size);
-        return STORAGE_ERR_NOT_VALID;
-    }
-
-    file = get_file_handle(session, req->handle);
+    file = get_file_handle(session, handle);
     if (!file) {
-        SS_ERR("%s: invalid file handle (%" PRIx32 ")\n", __func__,
-               req->handle);
+        SS_ERR("%s: invalid file handle (%" PRIx32 ")\n", __func__, handle);
         return STORAGE_ERR_NOT_VALID;
     }
 
-    offset = req->offset;
     if (offset > file->size) {
         result = storage_create_gap(session, file);
         if (result != STORAGE_NO_ERROR) {
@@ -750,19 +742,12 @@ static enum storage_err storage_file_write(
         }
     }
 
-    bufp = req->data;
-    buflen = req_size - sizeof(*req);
-
-    end_offset = offset + buflen - 1;
-    bytes_left = end_offset - offset + 1;
-
     /* transfer data one ss block at a time */
-    while (bytes_left) {
+    while (data_len) {
         block_num = offset / block_size;
         block_offset = offset % block_size;
-        len = (block_offset + bytes_left > block_size)
-                      ? block_size - block_offset
-                      : bytes_left;
+        len = (block_offset + data_len > block_size) ? block_size - block_offset
+                                                     : data_len;
 
         block_data = file_get_block_write(&session->tr, file, block_num,
                                           len != block_size, &block_data_ref);
@@ -772,17 +757,17 @@ static enum storage_err storage_file_write(
             goto err_write;
         }
 
-        memcpy(block_data + block_offset, bufp, len);
+        memcpy(block_data + block_offset, data, len);
         file_block_put_dirty(&session->tr, file, block_num, block_data,
                              &block_data_ref);
 
 #if TLOG_LVL >= TLOG_LVL_DEBUG
-        SS_INFO("%s: bufp %p offset 0x%" PRIx64 " len 0x%zx\n", __func__, bufp,
+        SS_INFO("%s: data %p offset 0x%" PRIx64 " len 0x%zx\n", __func__, data,
                 offset, len);
 #endif
-        bytes_left -= len;
         offset += len;
-        bufp += len;
+        data += len;
+        data_len -= len;
     }
 
     if (offset > file->size) {
@@ -794,10 +779,8 @@ static enum storage_err storage_file_write(
         return STORAGE_ERR_GENERIC;
     }
 
-    if (msg->flags & STORAGE_MSG_FLAG_TRANSACT_COMPLETE) {
-        transaction_complete_etc(
-                &session->tr,
-                msg->flags & STORAGE_MSG_FLAG_TRANSACT_CHECKPOINT);
+    if (flags.complete_transaction) {
+        transaction_complete_etc(&session->tr, flags.update_checkpoint);
         if (session->tr.failed) {
             SS_ERR("%s: transaction commit failed\n", __func__);
             return STORAGE_ERR_GENERIC;
@@ -1152,6 +1135,20 @@ static enum storage_err storage_tipc_file_close(
                               extract_storage_op_flags(msg->flags));
 }
 
+static enum storage_err storage_tipc_file_write(
+        struct storage_client_session* session,
+        struct storage_msg* msg,
+        struct storage_file_write_req* req,
+        size_t req_size) {
+    if (req_size <= sizeof(*req)) {
+        SS_ERR("%s: invalid request size (%zu)\n", __func__, req_size);
+        return STORAGE_ERR_NOT_VALID;
+    }
+    return storage_file_write(session, req->handle, req->offset, req->data,
+                              req_size - sizeof(*req),
+                              extract_storage_op_flags(msg->flags));
+}
+
 static struct storage_tipc_client_session* chan_context_to_client_session(
         struct ipc_channel_context* ctx) {
     assert(ctx != NULL);
@@ -1358,7 +1355,7 @@ static int client_handle_msg(struct ipc_channel_context* ctx,
         result = storage_tipc_file_close(session, msg, payload, payload_len);
         break;
     case STORAGE_FILE_WRITE:
-        result = storage_file_write(msg, payload, payload_len, session);
+        result = storage_tipc_file_write(session, msg, payload, payload_len);
         break;
     case STORAGE_FILE_READ:
         return storage_file_read(msg, payload, payload_len, tipc_session);
