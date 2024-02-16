@@ -16,25 +16,14 @@
 
 #pragma once
 
-#include <stdint.h>
-
+#include "client_session.h"
 #include "ipc.h"
-#include "transaction.h"
-
-/* SCSC (Storage Client Session Context) */
-#define STORAGE_CLIENT_SESSION_MAGIC 0x53435343
-
-struct file_handle;
 
 /*
- * Structure that tracks state associated with a session.
+ * Structure that tracks state associated with a session connected to an ipc
+ * channel.
  */
-struct storage_client_session {
-    uint32_t magic;
-    struct transaction tr;
-    uuid_t uuid;
-    struct file_handle** files;
-    size_t files_count;
-
-    struct ipc_channel_context context;
+struct storage_tipc_client_session {
+    struct storage_client_session session;
+    struct ipc_channel_context chan_ctx;
 };
