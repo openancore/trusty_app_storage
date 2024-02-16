@@ -763,37 +763,33 @@ struct storage_file_list_state {
     struct file_iterate_state iter;
     char prefix[34];
     size_t prefix_len;
-    uint8_t buf[1024];
-    size_t buf_used;
     uint8_t max_count;
     uint8_t count;
+    bool (*can_record_path)(void* callback_data, size_t max_path_len);
+    void (*record_path)(void* callback_data,
+                        enum storage_file_list_flag flags,
+                        const char* path,
+                        size_t path_len);
+    void* callback_data;
 };
 
 static bool storage_file_list_buf_full(struct storage_file_list_state* miter) {
-    size_t max_item_size = FS_PATH_MAX - miter->prefix_len + 2;
-
     if (miter->max_count && miter->count >= miter->max_count) {
         return true;
     }
 
-    return miter->buf_used + max_item_size > sizeof(miter->buf);
+    return !miter->can_record_path(miter->callback_data,
+                                   FS_PATH_MAX - miter->prefix_len);
 }
 
 static void storage_file_list_add(struct storage_file_list_state* miter,
-                                  uint8_t flags,
+                                  enum storage_file_list_flag flags,
                                   const char* path) {
-    struct storage_file_list_resp* resp;
-
     assert(!storage_file_list_buf_full(miter));
-
-    resp = (void*)(miter->buf + miter->buf_used);
-    resp->flags = flags;
-    miter->buf_used++;
+    size_t path_len = path ? strlen(path) : 0;
+    assert(path_len <= FS_PATH_MAX - miter->prefix_len);
+    miter->record_path(miter->callback_data, flags, path, path_len);
     miter->count++;
-    if (path) {
-        strcpy(resp->name, path);
-        miter->buf_used += strlen(path) + 1;
-    }
 }
 
 static bool storage_file_list_iter(struct file_iterate_state* iter,
@@ -821,102 +817,85 @@ static bool storage_file_list_iter(struct file_iterate_state* iter,
     return storage_file_list_buf_full(miter);
 }
 
-static int storage_file_list(struct storage_msg* msg,
-                             struct storage_file_list_req* req,
-                             size_t req_size,
-                             struct storage_tipc_client_session* tipc_session) {
-    struct storage_client_session* session = &tipc_session->session;
+static enum storage_err storage_file_list(
+        struct storage_client_session* session,
+        uint8_t max_count,
+        enum storage_file_list_flag last_state,
+        const char* last_fname,
+        size_t last_fname_len,
+        struct storage_op_flags flags,
+        bool (*can_record_path)(void* callback_data, size_t max_path_len),
+        void (*record_path)(void* callback_data,
+                            enum storage_file_list_flag flags,
+                            const char* path,
+                            size_t path_len),
+        void* callback_data) {
     enum storage_err result = STORAGE_NO_ERROR;
-    void* out = NULL;
-    size_t out_size = 0;
     enum file_op_result iterate_res;
     const char* last_name;
     char path_buf[FS_PATH_MAX];
-    uint8_t last_state;
-    const char* fname;
-    size_t fname_len;
+
     struct storage_file_list_state state = {
             .iter.file = storage_file_list_iter,
-            .buf_used = 0,
+            .max_count = max_count,
+            .record_path = record_path,
+            .can_record_path = can_record_path,
+            .callback_data = callback_data,
     };
-
-    if (req_size < sizeof(*req)) {
-        SS_ERR("%s: invalid request size (%zu)\n", __func__, req_size);
-        result = STORAGE_ERR_NOT_VALID;
-        goto err_invalid_input;
-    }
 
     result =
             get_path(state.prefix, sizeof(state.prefix), &session->uuid, "", 0);
     if (result != STORAGE_NO_ERROR) {
         SS_ERR("%s: internal error, get_path failed\n", __func__);
-        result = STORAGE_ERR_GENERIC;
-        goto err_get_path_prefix;
+        return STORAGE_ERR_GENERIC;
     }
     state.prefix_len = strlen(state.prefix);
 
-    last_state = req->flags & STORAGE_FILE_LIST_STATE_MASK;
-
     if (last_state == STORAGE_FILE_LIST_END) {
-        SS_ERR("%s: invalid request state (0x%" PRIx8 ")\n", __func__,
+        SS_ERR("%s: invalid request state (%" PRIx8 ")\n", __func__,
                last_state);
-        result = STORAGE_ERR_NOT_VALID;
-        goto err_invalid_state;
+        return STORAGE_ERR_NOT_VALID;
     }
 
     if (last_state == STORAGE_FILE_LIST_START) {
         last_name = NULL;
     } else {
         /* make sure filename is legal */
-        fname = req->name;
-        fname_len = req_size - sizeof(*req);
-        if (!is_valid_name(fname, fname_len)) {
+        if (!is_valid_name(last_fname, last_fname_len)) {
             SS_ERR("%s: invalid filename\n", __func__);
-            result = STORAGE_ERR_NOT_VALID;
-            goto err_invalid_filename;
+            return STORAGE_ERR_NOT_VALID;
         }
 
-        result = get_path(path_buf, sizeof(path_buf), &session->uuid, fname,
-                          fname_len);
+        result = get_path(path_buf, sizeof(path_buf), &session->uuid,
+                          last_fname, last_fname_len);
         if (result != STORAGE_NO_ERROR) {
-            goto err_invalid_filename;
+            return result;
         }
 
         last_name = path_buf;
     }
 
     if (last_state != STORAGE_FILE_LIST_ADDED) {
-        iterate_res =
-                file_iterate(&session->tr, last_name, false, &state.iter,
-                             msg->flags & STORAGE_MSG_FLAG_FS_REPAIRED_ACK);
+        iterate_res = file_iterate(&session->tr, last_name, false, &state.iter,
+                                   flags.allow_repaired);
         last_name = NULL;
     } else {
         iterate_res = FILE_OP_SUCCESS;
     }
     if (iterate_res == FILE_OP_SUCCESS && !storage_file_list_buf_full(&state)) {
-        iterate_res =
-                file_iterate(&session->tr, last_name, true, &state.iter,
-                             msg->flags & STORAGE_MSG_FLAG_FS_REPAIRED_ACK);
+        iterate_res = file_iterate(&session->tr, last_name, true, &state.iter,
+                                   flags.allow_repaired);
     }
     if (iterate_res != FILE_OP_SUCCESS) {
         SS_ERR("%s: file_iterate failed\n", __func__);
-        result = file_op_result_to_storage_err(iterate_res);
-        goto err_file_iterate;
+        return file_op_result_to_storage_err(iterate_res);
     }
 
     if (!storage_file_list_buf_full(&state)) {
         storage_file_list_add(&state, STORAGE_FILE_LIST_END, NULL);
     }
 
-    out = state.buf;
-    out_size = state.buf_used;
-
-err_file_iterate:
-err_invalid_filename:
-err_invalid_state:
-err_get_path_prefix:
-err_invalid_input:
-    return send_response(tipc_session, result, msg, out, out_size);
+    return STORAGE_NO_ERROR;
 }
 
 static enum storage_err storage_file_get_size(
@@ -1113,6 +1092,62 @@ static enum storage_err storage_tipc_file_write(
     return storage_file_write(session, req->handle, req->offset, req->data,
                               req_size - sizeof(*req),
                               extract_storage_op_flags(msg->flags));
+}
+
+struct storage_tipc_file_iter_data {
+    char resp_buf[1024];
+    size_t buf_used;
+};
+
+static bool buf_has_space(void* self, size_t max_path_len) {
+    struct storage_tipc_file_iter_data* this = self;
+    /* One extra byte for flags plus one for the path's nul terminator */
+    size_t max_resp_size = max_path_len + 2;
+    return this->buf_used + max_resp_size <= sizeof(this->resp_buf);
+}
+
+static void write_to_buf(void* self,
+                         enum storage_file_list_flag flags,
+                         const char* path,
+                         size_t path_len) {
+    struct storage_tipc_file_iter_data* this = self;
+    struct storage_file_list_resp* resp =
+            (void*)(this->resp_buf + this->buf_used);
+
+    resp->flags = flags;
+    this->buf_used++;
+
+    if (path) {
+        strncpy(resp->name, path, path_len);
+        resp->name[path_len] = '\0';
+        this->buf_used += path_len + 1;
+    }
+}
+
+static enum storage_err storage_tipc_file_list(
+        struct storage_tipc_client_session* tipc_session,
+        struct storage_msg* msg,
+        struct storage_file_list_req* req,
+        size_t req_size) {
+    if (req_size < sizeof(*req)) {
+        SS_ERR("%s: invalid request size (%zu)\n", __func__, req_size);
+        return send_result(tipc_session, msg, STORAGE_ERR_NOT_VALID);
+    }
+
+    struct storage_tipc_file_iter_data callback_data = {
+            .buf_used = 0,
+    };
+
+    enum storage_err result = storage_file_list(
+            &tipc_session->session, req->max_count,
+            req->flags & STORAGE_FILE_LIST_STATE_MASK, req->name,
+            req_size - sizeof(*req), extract_storage_op_flags(msg->flags),
+            buf_has_space, write_to_buf, &callback_data);
+    if (result != STORAGE_NO_ERROR) {
+        return send_result(tipc_session, msg, result);
+    }
+    return send_response(tipc_session, result, msg, callback_data.resp_buf,
+                         callback_data.buf_used);
 }
 
 static enum storage_err storage_tipc_file_get_size(
@@ -1358,7 +1393,7 @@ static int client_handle_msg(struct ipc_channel_context* ctx,
     case STORAGE_FILE_READ:
         return storage_file_read(msg, payload, payload_len, tipc_session);
     case STORAGE_FILE_LIST:
-        return storage_file_list(msg, payload, payload_len, tipc_session);
+        return storage_tipc_file_list(tipc_session, msg, payload, payload_len);
     case STORAGE_FILE_GET_SIZE:
         return storage_tipc_file_get_size(tipc_session, msg, payload,
                                           payload_len);
