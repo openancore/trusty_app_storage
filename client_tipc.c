@@ -999,24 +999,15 @@ err_invalid_input:
 }
 
 static enum storage_err storage_file_set_size(
-        struct storage_msg* msg,
-        struct storage_file_set_size_req* req,
-        size_t req_size,
-        struct storage_client_session* session) {
+        struct storage_client_session* session,
+        uint32_t handle,
+        uint64_t new_size,
+        struct storage_op_flags flags) {
     struct file_handle* file;
-    uint64_t new_size;
 
-    if (req_size != sizeof(*req)) {
-        SS_ERR("%s: inavlid request size (%zu)\n", __func__, req_size);
-        return STORAGE_ERR_NOT_VALID;
-    }
-
-    new_size = req->size;
-
-    file = get_file_handle(session, req->handle);
+    file = get_file_handle(session, handle);
     if (!file) {
-        SS_ERR("%s: invalid file handle (%" PRIx32 ")\n", __func__,
-               req->handle);
+        SS_ERR("%s: invalid file handle (%" PRIx32 ")\n", __func__, handle);
         return STORAGE_ERR_NOT_VALID;
     }
 
@@ -1040,10 +1031,8 @@ static enum storage_err storage_file_set_size(
     }
 
     /* try to commit */
-    if (msg->flags & STORAGE_MSG_FLAG_TRANSACT_COMPLETE) {
-        transaction_complete_etc(
-                &session->tr,
-                msg->flags & STORAGE_MSG_FLAG_TRANSACT_CHECKPOINT);
+    if (flags.complete_transaction) {
+        transaction_complete_etc(&session->tr, flags.update_checkpoint);
     }
 
     if (session->tr.failed) {
@@ -1147,6 +1136,19 @@ static enum storage_err storage_tipc_file_write(
     return storage_file_write(session, req->handle, req->offset, req->data,
                               req_size - sizeof(*req),
                               extract_storage_op_flags(msg->flags));
+}
+
+static enum storage_err storage_tipc_file_set_size(
+        struct storage_client_session* session,
+        struct storage_msg* msg,
+        struct storage_file_set_size_req* req,
+        size_t req_size) {
+    if (req_size != sizeof(*req)) {
+        SS_ERR("%s: invalid request size (%zu)\n", __func__, req_size);
+        return STORAGE_ERR_NOT_VALID;
+    }
+    return storage_file_set_size(session, req->handle, req->size,
+                                 extract_storage_op_flags(msg->flags));
 }
 
 static struct storage_tipc_client_session* chan_context_to_client_session(
@@ -1364,7 +1366,7 @@ static int client_handle_msg(struct ipc_channel_context* ctx,
     case STORAGE_FILE_GET_SIZE:
         return storage_file_get_size(msg, payload, payload_len, tipc_session);
     case STORAGE_FILE_SET_SIZE:
-        result = storage_file_set_size(msg, payload, payload_len, session);
+        result = storage_tipc_file_set_size(session, msg, payload, payload_len);
         break;
     default:
         SS_ERR("%s: unsupported command 0x%" PRIx32 "\n", __func__, msg->cmd);
