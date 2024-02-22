@@ -27,7 +27,7 @@
 #include "crypt.h"
 #include "ipc.h"
 #include "proxy.h"
-#include "tipc_limits.h"
+#include "storage_limits.h"
 
 #define SS_ERR(args...) fprintf(stderr, "ss: " args)
 
