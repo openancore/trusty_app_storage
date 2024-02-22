@@ -54,7 +54,7 @@ static inline void transaction_complete_update_checkpoint(
 }
 
 static void open_test_file_etc(struct transaction* tr,
-                               struct file_handle* file,
+                               struct storage_file_handle* file,
                                const char* path,
                                enum file_create_mode create,
                                enum file_op_result expected_result,
@@ -75,7 +75,7 @@ test_abort:;
 }
 
 static void open_test_file(struct transaction* tr,
-                           struct file_handle* file,
+                           struct storage_file_handle* file,
                            const char* path,
                            enum file_create_mode create) {
     open_test_file_etc(tr, file, path, create, FILE_OP_SUCCESS, false);
@@ -83,7 +83,7 @@ static void open_test_file(struct transaction* tr,
 
 /* run tests on already open file */
 static void file_test_open(struct transaction* tr,
-                           struct file_handle* file,
+                           struct storage_file_handle* file,
                            int allocate,
                            int read,
                            int free,
@@ -192,7 +192,7 @@ static void file_test_etc(struct transaction* tr,
                           bool delete,
                           int id) {
     enum file_op_result delete_res;
-    struct file_handle file;
+    struct storage_file_handle file;
 
     open_test_file_etc(tr, &file, path, create, FILE_OP_SUCCESS,
                        allow_repaired);
@@ -297,7 +297,7 @@ TEST_F_TEARDOWN(StorageTest) {
 
 TEST_P(StorageTest, FileCreate) {
     const char* filename = "FileCreate";
-    struct file_handle file;
+    struct storage_file_handle file;
     open_test_file(&_state->tr, &file, filename, FILE_OPEN_CREATE_EXCLUSIVE);
     transaction_complete(&_state->tr);
     ASSERT_EQ(false, _state->tr.failed);
@@ -603,7 +603,7 @@ test_abort:;
 TEST_P(StorageTest, DesyncBackingFile) {
     int rc;
     handle_t null_handle = 0;
-    struct file_handle file;
+    struct storage_file_handle file;
     bool allow_repaired = false;
     struct fs* fs = _state->tr.fs;
 
@@ -685,7 +685,7 @@ test_abort:;
 TEST_P(StorageTest, CorruptFileInfo) {
     int rc;
     handle_t null_handle = 0;
-    struct file_handle file;
+    struct storage_file_handle file;
     bool allow_repaired = false;
     struct fs* fs = _state->tr.fs;
 

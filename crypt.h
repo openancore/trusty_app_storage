@@ -61,15 +61,15 @@ int calculate_mac(const struct key* key,
 
 int generate_iv(struct iv* iv_out);
 
-int encrypt(const struct key* key,
-            void* data_in_out,
-            size_t data_size,
-            const struct iv* iv_in);
+int storage_encrypt(const struct key* key,
+                    void* data_in_out,
+                    size_t data_size,
+                    const struct iv* iv_in);
 
-int decrypt(const struct key* key,
-            void* data_in_out,
-            size_t data_size,
-            const struct iv* iv_in);
+int storage_decrypt(const struct key* key,
+                    void* data_in_out,
+                    size_t data_size,
+                    const struct iv* iv_in);
 
 void crypt_init(void);
 

@@ -26,7 +26,7 @@ struct transaction;
 
 #define FS_PATH_MAX (64 + 128)
 
-struct file_handle {
+struct storage_file_handle {
     struct list_node node;
     struct block_mac to_commit_block_mac;
     struct block_mac committed_block_mac;
@@ -69,17 +69,17 @@ struct file_iterate_state {
 
 size_t get_file_block_size(struct fs* fs);
 const void* file_get_block(struct transaction* tr,
-                           struct file_handle* file,
+                           struct storage_file_handle* file,
                            data_block_t file_block,
                            struct obj_ref* ref);
 void* file_get_block_write(struct transaction* tr,
-                           struct file_handle* file,
+                           struct storage_file_handle* file,
                            data_block_t file_block,
                            bool read,
                            struct obj_ref* ref);
 void file_block_put(const void* data, struct obj_ref* data_ref);
 void file_block_put_dirty(struct transaction* tr,
-                          struct file_handle* file,
+                          struct storage_file_handle* file,
                           data_block_t file_block,
                           void* data,
                           struct obj_ref* data_ref);
@@ -90,16 +90,16 @@ const struct file_info* file_get_info(struct transaction* tr,
 void file_info_put(const struct file_info* data, struct obj_ref* data_ref);
 
 bool file_get_size(struct transaction* tr,
-                   struct file_handle* file,
+                   struct storage_file_handle* file,
                    data_block_t* size);
 void file_set_size(struct transaction* tr,
-                   struct file_handle* file,
+                   struct storage_file_handle* file,
                    data_block_t size);
 
-void file_print(struct transaction* tr, const struct file_handle* file);
+void file_print(struct transaction* tr, const struct storage_file_handle* file);
 void files_print(struct transaction* tr);
 
-bool file_check(struct transaction* tr, const struct file_handle* file);
+bool file_check(struct transaction* tr, const struct storage_file_handle* file);
 
 void file_transaction_complete(struct transaction* tr,
                                struct block_mac* new_files_block_mac);
@@ -140,16 +140,16 @@ enum file_op_result {
 };
 enum file_op_result file_open(struct transaction* tr,
                               const char* path,
-                              struct file_handle* file,
+                              struct storage_file_handle* file,
                               enum file_create_mode create,
                               bool allow_repaired);
-void file_close(struct file_handle* file);
+void file_close(struct storage_file_handle* file);
 
 enum file_op_result file_delete(struct transaction* tr,
                                 const char* path,
                                 bool allow_repaired);
 enum file_op_result file_move(struct transaction* tr,
-                              struct file_handle* file,
+                              struct storage_file_handle* file,
                               const char* dest_path,
                               enum file_create_mode dest_create,
                               bool allow_repaired);

@@ -82,5 +82,5 @@ static inline void block_mac_copy_mac(const struct transaction* tr,
                                       struct block_mac* dest,
                                       const struct block_mac* src) {
     assert(block_mac_same_block(tr, dest, src));
-    block_mac_set_mac(tr, dest, block_mac_to_mac(tr, src));
+    block_mac_set_mac(tr, dest, (const struct mac*)block_mac_to_mac(tr, src));
 }

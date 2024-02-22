@@ -121,7 +121,8 @@ err:
  * @tr:         Transaction object.
  * @file:       File handle object.
  */
-void file_print(struct transaction* tr, const struct file_handle* file) {
+void file_print(struct transaction* tr,
+                const struct storage_file_handle* file) {
     const struct file_entry* file_entry_ro;
     struct obj_ref file_entry_ro_ref = OBJ_REF_INITIAL_VALUE(file_entry_ro_ref);
     struct block_map block_map;
@@ -148,7 +149,7 @@ void file_print(struct transaction* tr, const struct file_handle* file) {
  */
 void files_print(struct transaction* tr) {
     struct block_tree_path path;
-    struct file_handle file;
+    struct storage_file_handle file;
 
     printf("%s: files:\n", __func__);
     block_tree_print(tr, &tr->fs->files);
@@ -169,7 +170,8 @@ void files_print(struct transaction* tr) {
  * Return: %false if an unrecoverable error was detected in the file block map,
  * %true if the block map was consistent.
  */
-bool file_check(struct transaction* tr, const struct file_handle* file) {
+bool file_check(struct transaction* tr,
+                const struct storage_file_handle* file) {
     struct block_map block_map;
     data_block_t file_block_size = get_file_block_size(tr->fs);
 
@@ -188,7 +190,7 @@ bool file_check(struct transaction* tr, const struct file_handle* file) {
 static void file_block_map_update(struct transaction* tr,
                                   struct block_map* block_map,
                                   const char* new_path,
-                                  struct file_handle* file) {
+                                  struct storage_file_handle* file) {
     bool found;
     data_block_t old_block;
     data_block_t file_block;
@@ -367,7 +369,7 @@ size_t get_file_block_size(struct fs* fs) {
  * @file_block or if @write is %true and a block could not be allocated.
  */
 static const void* file_get_block_etc(struct transaction* tr,
-                                      struct file_handle* file,
+                                      struct storage_file_handle* file,
                                       data_block_t file_block,
                                       bool read,
                                       bool write,
@@ -469,7 +471,7 @@ err:
  * @file_block.
  */
 const void* file_get_block(struct transaction* tr,
-                           struct file_handle* file,
+                           struct storage_file_handle* file,
                            data_block_t file_block,
                            struct obj_ref* ref) {
     return file_get_block_etc(tr, file, file_block, true, false, ref);
@@ -486,7 +488,7 @@ const void* file_get_block(struct transaction* tr,
  * Return: Block data pointer, or NULL if  a block could not be allocated.
  */
 void* file_get_block_write(struct transaction* tr,
-                           struct file_handle* file,
+                           struct storage_file_handle* file,
                            data_block_t file_block,
                            bool read,
                            struct obj_ref* ref) {
@@ -514,7 +516,7 @@ void file_block_put(const void* data, struct obj_ref* data_ref) {
  * file_get_block_write, and update mac value in block_mac.
  */
 void file_block_put_dirty(struct transaction* tr,
-                          struct file_handle* file,
+                          struct storage_file_handle* file,
                           data_block_t file_block,
                           void* data,
                           struct obj_ref* data_ref) {
@@ -575,7 +577,7 @@ void file_info_put(const struct file_info* data, struct obj_ref* data_ref) {
  * invalid or @tr has failed.
  */
 bool file_get_size(struct transaction* tr,
-                   struct file_handle* file,
+                   struct storage_file_handle* file,
                    data_block_t* size) {
     if (tr->failed) {
         pr_warn("transaction failed, ignore\n");
@@ -603,7 +605,7 @@ bool file_get_size(struct transaction* tr,
  * partial block data.
  */
 void file_set_size(struct transaction* tr,
-                   struct file_handle* file,
+                   struct storage_file_handle* file,
                    data_block_t size) {
     data_block_t file_block;
     struct block_map block_map;
@@ -880,11 +882,13 @@ static bool file_lookup_not_removed(struct block_mac* block_mac_out,
  *
  * Return: file handle of open file if file is open in @tr, NULL otherwise.
  */
-static struct file_handle* file_find_open(struct transaction* tr,
-                                          const struct block_mac* block_mac) {
-    struct file_handle* file;
+static struct storage_file_handle* file_find_open(
+        struct transaction* tr,
+        const struct block_mac* block_mac) {
+    struct storage_file_handle* file;
 
-    list_for_every_entry(&tr->open_files, file, struct file_handle, node) {
+    list_for_every_entry(&tr->open_files, file, struct storage_file_handle,
+                         node) {
         if (block_mac_same_block(tr, &file->block_mac, block_mac)) {
             return file;
         }
@@ -976,7 +980,7 @@ enum file_op_result file_iterate(struct transaction* tr,
  */
 enum file_op_result file_open(struct transaction* tr,
                               const char* path,
-                              struct file_handle* file,
+                              struct storage_file_handle* file,
                               enum file_create_mode create,
                               bool allow_repaired) {
     bool found;
@@ -1056,7 +1060,7 @@ created:
  *
  * Must be called before freeing @file after a successful file_open call.
  */
-void file_close(struct file_handle* file) {
+void file_close(struct storage_file_handle* file) {
     list_delete(&file->node);
 }
 
@@ -1082,7 +1086,7 @@ enum file_op_result file_delete(struct transaction* tr,
     struct obj_ref file_entry_ref = OBJ_REF_INITIAL_VALUE(file_entry_ref);
     struct block_map block_map = BLOCK_MAP_INITIAL_VALUE(block_map);
     struct block_tree_path tree_path;
-    struct file_handle* open_file;
+    struct storage_file_handle* open_file;
 
     assert(tr->fs);
     if (!fs_is_readable(tr->fs)) {
@@ -1166,7 +1170,7 @@ enum file_op_result file_delete(struct transaction* tr,
  * and %FILE_OP_ERR_FAILED if some other error occurred.
  */
 enum file_op_result file_move(struct transaction* tr,
-                              struct file_handle* file,
+                              struct storage_file_handle* file,
                               const char* dest_path,
                               enum file_create_mode dest_create,
                               bool allow_repaired) {
@@ -1228,15 +1232,15 @@ enum file_op_result file_move(struct transaction* tr,
 static void file_for_each_open(struct transaction* tr,
                                void (*func)(struct transaction* tr,
                                             struct transaction* file_tr,
-                                            struct file_handle* file)) {
+                                            struct storage_file_handle* file)) {
     struct transaction* tmp_tr;
     struct transaction* other_tr;
-    struct file_handle* file;
+    struct storage_file_handle* file;
 
     list_for_every_entry_safe(&tr->fs->transactions, other_tr, tmp_tr,
                               struct transaction, node) {
-        list_for_every_entry(&other_tr->open_files, file, struct file_handle,
-                             node) {
+        list_for_every_entry(&other_tr->open_files, file,
+                             struct storage_file_handle, node) {
             func(tr, other_tr, file);
         }
     }
@@ -1250,7 +1254,7 @@ static void file_for_each_open(struct transaction* tr,
  */
 static void file_restore_to_commit(struct transaction* tr,
                                    struct transaction* file_tr,
-                                   struct file_handle* file) {
+                                   struct storage_file_handle* file) {
     struct block_mac* src = &file->committed_block_mac;
     struct block_mac* dest = &file->to_commit_block_mac;
     if (block_mac_same_block(tr, src, dest)) {
@@ -1277,7 +1281,7 @@ static void file_restore_to_commit(struct transaction* tr,
  */
 static void file_apply_to_commit(struct transaction* tr,
                                  struct transaction* file_tr,
-                                 struct file_handle* file) {
+                                 struct storage_file_handle* file) {
     struct block_mac* src = &file->to_commit_block_mac;
     struct block_mac* dest = &file->committed_block_mac;
 
@@ -1347,11 +1351,11 @@ static void file_update_block_mac_tr(struct transaction* tr,
                                      bool old_block_no_mac,
                                      const struct block_mac* new_block_mac,
                                      data_block_t new_size) {
-    struct file_handle* file;
+    struct storage_file_handle* file;
 
     assert(block_mac_valid(tr, old_block_mac) || other_tr == tr);
-    list_for_every_entry(&other_tr->open_files, file, struct file_handle,
-                         node) {
+    list_for_every_entry(&other_tr->open_files, file,
+                         struct storage_file_handle, node) {
         if (block_mac_valid(tr, old_block_mac)
                     ? !block_mac_same_block(tr, &file->committed_block_mac,
                                             old_block_mac)
@@ -1559,7 +1563,7 @@ void file_transaction_complete(struct transaction* tr,
  * Return: %true if @file was modified by @tr, %false otherwise.
  */
 static bool transaction_changed_file(struct transaction* tr,
-                                     struct file_handle* file) {
+                                     struct storage_file_handle* file) {
     return !block_mac_same_block(tr, &file->committed_block_mac,
                                  &file->block_mac);
 }
@@ -1608,10 +1612,11 @@ static bool file_read_size(struct transaction* tr,
  * was activeted. File handles for files crreated by @tr become invalid.
  */
 void file_transaction_failed(struct transaction* tr) {
-    struct file_handle* file;
+    struct storage_file_handle* file;
     bool success;
 
-    list_for_every_entry(&tr->open_files, file, struct file_handle, node) {
+    list_for_every_entry(&tr->open_files, file, struct storage_file_handle,
+                         node) {
         file->used_by_tr = false;
         if (transaction_changed_file(tr, file)) {
             file->block_mac = file->committed_block_mac;
@@ -1641,7 +1646,7 @@ void file_transaction_failed(struct transaction* tr) {
  */
 static void file_rebuild_free_set(struct transaction* tr,
                                   struct block_set* new_free_set,
-                                  struct file_handle* file) {
+                                  struct storage_file_handle* file) {
     struct block_map block_map;
     data_block_t block;
     struct block_tree_path path;
@@ -1688,7 +1693,7 @@ void files_rebuild_free_set(struct transaction* tr,
     data_block_t block;
     struct block_tree_path path;
     int i;
-    struct file_handle file;
+    struct storage_file_handle file;
 
     fs_file_tree_init(tr->fs, &files);
     block_mac_copy(tr, &files.root, files_root);
