@@ -39,6 +39,7 @@ HOST_FLAGS := -DBUILD_STORAGE_TEST=1
 HOST_INCLUDE_DIRS += \
 	$(STORAGE_DIR) \
 	$(COMMON_DIR) \
+	trusty/kernel/lib/libc-ext/include \
 
 HOST_LIBS := \
 	m \

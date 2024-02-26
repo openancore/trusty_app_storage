@@ -844,7 +844,7 @@ static struct block_cache_entry* block_cache_get(
     if (load) {
         res = block_cache_load_entry(entry, mac, mac_size);
         if (res == CACHE_LOAD_MAC_MISMATCH) {
-            error_report_block_mac_mismatch(fs->name, BLOCK_TYPE_UNKNOWN);
+            error_report_block_mac_mismatch(fs->name, TRUSTY_BLOCKTYPE_UNKNOWN);
         }
         if (load_result) {
             *load_result = res;

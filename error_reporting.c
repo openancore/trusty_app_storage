@@ -15,21 +15,24 @@
  */
 
 #include "error_reporting.h"
+#include <uapi/err.h>
 
 #ifdef STORAGE_ENABLE_ERROR_REPORTING
 
-#include <android/frameworks/stats/atoms.h>
-#include <android/trusty/stats/ports.h>
+#include <lib/tipc/tipc.h>
+#include <lib/tipc/tipc_srv.h>
 #include <trusty/uuid.h>
 #include <trusty_log.h>
 
 #include <storage_consts.h>
+#include <interface/metrics/metrics.h>
 #include "block_device_tipc.h"
 
 #define TLOG_TAG "ss-err_rep"
 
 struct uuid storage_service_uuid = STORAGE_SERVICE_UUID;
 char storage_service_uuid_str[UUID_STR_SIZE];
+handle_t metrics_chan;
 
 static void init_uuid_str(void) {
     if (storage_service_uuid_str[0] == '\0') {
@@ -37,7 +40,7 @@ static void init_uuid_str(void) {
     }
 }
 
-static enum stats_trusty_file_system map_fs_name(const char* name) {
+static enum trusty_file_system map_fs_name(const char* name) {
     if (name == file_system_id_tp) {
         return TRUSTY_FS_TP;
     }
@@ -57,49 +60,15 @@ static enum stats_trusty_file_system map_fs_name(const char* name) {
     return TRUSTY_FS_UNKNOWN;
 }
 
-static enum stats_trusty_block_type map_block_type(
-        enum error_report_block_type block_type) {
-    switch (block_type) {
-    case BLOCK_TYPE_UNKNOWN:
-        return TRUSTY_BLOCKTYPE_UNKNOWN;
-    case BLOCK_TYPE_FILES_ROOT:
-        return TRUSTY_BLOCKTYPE_FILES_ROOT;
-    case BLOCK_TYPE_FREE_ROOT:
-        return TRUSTY_BLOCKTYPE_FREE_ROOT;
-    case BLOCK_TYPE_FILES_INTERNAL:
-        return TRUSTY_BLOCKTYPE_FILES_INTERNAL;
-    case BLOCK_TYPE_FREE_INTERNAL:
-        return TRUSTY_BLOCKTYPE_FREE_INTERNAL;
-    case BLOCK_TYPE_FILE_ENTRY:
-        return TRUSTY_BLOCKTYPE_FILE_ENTRY;
-    case BLOCK_TYPE_FILE_BLOCK_MAP:
-        return TRUSTY_BLOCKTYPE_FILE_BLOCK_MAP;
-    case BLOCK_TYPE_FILE_DATA:
-        return TRUSTY_BLOCKTYPE_FILE_DATA;
-    case BLOCK_TYPE_CHECKPOINT_ROOT:
-        return TRUSTY_BLOCKTYPE_CHECKPOINT_ROOT;
-    case BLOCK_TYPE_CHECKPOINT_FILES_ROOT:
-        return TRUSTY_BLOCKTYPE_CHECKPOINT_FILES_ROOT;
-    case BLOCK_TYPE_CHECKPOINT_FREE_ROOT:
-        return TRUSTY_BLOCKTYPE_CHECKPOINT_FREE_ROOT;
-    default:
-        TLOGE("Unknown block type: %d\n", block_type);
-        return TRUSTY_BLOCKTYPE_UNKNOWN;
-    }
-}
-
-void do_error_report(enum stats_trusty_storage_error_type type,
+void do_error_report(enum trusty_storage_error_type type,
                      const char* fs_name,
-                     enum error_report_block_type block_type) {
+                     enum trusty_block_type block_type) {
     init_uuid_str();
-    struct stats_trusty_storage_error atom = {
-            .reverse_domain_name = "google.android.trusty",
-            .reverse_domain_name_len = sizeof("google.android.trusty"),
+
+    struct metrics_report_storage_error_req atom = {
             .error = TRUSTY_STORAGE_ERROR_UNKNOWN,
-            .app_id = storage_service_uuid_str,
-            .app_id_len = UUID_STR_SIZE,
-            .client_app_id = "",
-            .client_app_id_len = sizeof(""),
+            .app_id = {},
+            .client_app_id = {},
             .write = 0,
             .file_system = TRUSTY_FS_UNKNOWN,
             .file_path_hash = 0,
@@ -107,18 +76,53 @@ void do_error_report(enum stats_trusty_storage_error_type type,
             .repair_counter = 0,
     };
 
-    atom.error = type;
-    atom.file_system = map_fs_name(fs_name);
-    atom.block_type = map_block_type(block_type);
+    struct metrics_req req;
+    req.cmd = METRICS_CMD_REPORT_STORAGE_ERROR;
 
-    stats_trusty_storage_error_report(METRICS_ISTATS_PORT,
-                                      sizeof(METRICS_ISTATS_PORT), atom);
+    memcpy(storage_service_uuid_str, atom.app_id, UUID_STR_SIZE);
+
+    struct iovec iovs[] = {
+            {
+                    .iov_base = &req,
+                    .iov_len = sizeof(req),
+            },
+            {
+                    .iov_base = &atom,
+                    .iov_len = sizeof(atom),
+            },
+    };
+    struct ipc_msg msg = {
+            .num_iov = countof(iovs),
+            .iov = iovs,
+    };
+
+    size_t total_len = sizeof(req) + sizeof(atom);
+
+    int rc = send_msg(metrics_chan, &msg);
+    if (rc != (int)total_len) {
+        TLOGE("failed (%d) to send storage event\n", rc);
+    }
+}
+
+int connect_metrics_ta(void) {
+    handle_t chan;
+    int rc = tipc_connect(&chan, METRICS_CONSUMER_PORT);
+    if (rc != NO_ERROR) {
+        TLOGE("failed (%d) to connect to metrics TA\n", rc);
+        return rc;
+    }
+    metrics_chan = chan;
+    return NO_ERROR;
 }
 
 #else /* STORAGE_ENABLE_ERROR_REPORTING */
 
-void do_error_report(enum stats_trusty_storage_error_type type,
+void do_error_report(enum trusty_storage_error_type type,
                      const char* fs_name,
-                     enum error_report_block_type block_type) {}
+                     enum trusty_block_type block_type) {}
+
+int connect_metrics_ta(void) {
+    return NO_ERROR;
+}
 
 #endif /* STORAGE_ENABLE_ERROR_REPORTING */

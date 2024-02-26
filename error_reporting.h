@@ -17,88 +17,102 @@
 #pragma once
 
 #include "fs.h"
+#include <lk/compiler.h>
+#include <trusty/uuid.h>
+#include <trusty_ipc.h>
 
-#if defined(STORAGE_ENABLE_ERROR_REPORTING)
+#define METRICS_CONSUMER_PORT "com.android.trusty.metrics.consumer"
 
-#include <android/frameworks/stats/atoms.h>
-
-#else
-
-/*
- * Copied from auto-generated atoms.h from the trusty/user/base/lib/atoms
- * library. We can't include this header for host tests because it would require
- * somehow overhauling the protoc.mk build type to work for host tests.
- */
-enum stats_trusty_storage_error_type {
-    TRUSTY_STORAGE_ERROR_UNKNOWN,
-    TRUSTY_STORAGE_ERROR_SUPERBLOCK_INVALID,
-    TRUSTY_STORAGE_ERROR_BLOCK_MAC_MISMATCH,
-    TRUSTY_STORAGE_ERROR_BLOCK_HEADER_INVALID,
-    TRUSTY_STORAGE_ERROR_RPMB_COUNTER_MISMATCH,
-    TRUSTY_STORAGE_ERROR_RPMB_COUNTER_MISMATCH_RECOVERED,
-    TRUSTY_STORAGE_ERROR_RPMB_COUNTER_READ_FAILURE,
-    TRUSTY_STORAGE_ERROR_RPMB_MAC_MISMATCH,
-    TRUSTY_STORAGE_ERROR_RPMB_ADDR_MISMATCH,
-    TRUSTY_STORAGE_ERROR_RPMB_FAILURE_RESPONSE,
-    TRUSTY_STORAGE_ERROR_RPMB_UNKNOWN,
-    TRUSTY_STORAGE_ERROR_RPMB_SCSI_ERROR,
-    TRUSTY_STORAGE_ERROR_IO_ERROR,
-    TRUSTY_STORAGE_ERROR_PROXY_COMMUNICATION_FAILURE,
+enum trusty_storage_error_type {
+  TRUSTY_STORAGE_ERROR_UNKNOWN = 0,
+  TRUSTY_STORAGE_ERROR_SUPERBLOCK_INVALID = 1,
+  TRUSTY_STORAGE_ERROR_BLOCK_MAC_MISMATCH = 2,
+  TRUSTY_STORAGE_ERROR_BLOCK_HEADER_INVALID = 3,
+  TRUSTY_STORAGE_ERROR_RPMB_COUNTER_MISMATCH = 4,
+  TRUSTY_STORAGE_ERROR_RPMB_COUNTER_MISMATCH_RECOVERED = 5,
+  TRUSTY_STORAGE_ERROR_RPMB_COUNTER_READ_FAILURE = 6,
+  TRUSTY_STORAGE_ERROR_RPMB_MAC_MISMATCH = 7,
+  TRUSTY_STORAGE_ERROR_RPMB_ADDR_MISMATCH = 8,
+  TRUSTY_STORAGE_ERROR_RPMB_FAILURE_RESPONSE = 9,
+  TRUSTY_STORAGE_ERROR_RPMB_UNKNOWN = 10,
+  TRUSTY_STORAGE_ERROR_RPMB_SCSI_ERROR = 11,
+  TRUSTY_STORAGE_ERROR_IO_ERROR = 12,
+  TRUSTY_STORAGE_ERROR_PROXY_COMMUNICATION_FAILURE = 13,
 };
 
-#endif /* STORAGE_ENABLE_ERROR_REPORTING */
-
-enum error_report_block_type {
-    BLOCK_TYPE_UNKNOWN,
-    BLOCK_TYPE_FILES_ROOT,
-    BLOCK_TYPE_FREE_ROOT,
-    BLOCK_TYPE_FILES_INTERNAL,
-    BLOCK_TYPE_FREE_INTERNAL,
-    BLOCK_TYPE_FILE_ENTRY,
-    BLOCK_TYPE_FILE_BLOCK_MAP,
-    BLOCK_TYPE_FILE_DATA,
-    BLOCK_TYPE_CHECKPOINT_ROOT,
-    BLOCK_TYPE_CHECKPOINT_FILES_ROOT,
-    BLOCK_TYPE_CHECKPOINT_FREE_ROOT,
+enum trusty_file_system {
+  TRUSTY_FS_UNKNOWN = 0,
+  TRUSTY_FS_TP = 1,
+  TRUSTY_FS_TD = 2,
+  TRUSTY_FS_TDP = 3,
+  TRUSTY_FS_TDEA = 4,
+  TRUSTY_FS_NSP = 5,
 };
 
-void do_error_report(enum stats_trusty_storage_error_type type,
+enum trusty_block_type {
+  TRUSTY_BLOCKTYPE_UNKNOWN = 0,
+  TRUSTY_BLOCKTYPE_FILES_ROOT = 1,
+  TRUSTY_BLOCKTYPE_FREE_ROOT = 2,
+  TRUSTY_BLOCKTYPE_FILES_INTERNAL = 3,
+  TRUSTY_BLOCKTYPE_FREE_INTERNAL = 4,
+  TRUSTY_BLOCKTYPE_FILE_ENTRY = 5,
+  TRUSTY_BLOCKTYPE_FILE_BLOCK_MAP = 6,
+  TRUSTY_BLOCKTYPE_FILE_DATA = 7,
+  TRUSTY_BLOCKTYPE_CHECKPOINT_ROOT = 8,
+  TRUSTY_BLOCKTYPE_CHECKPOINT_FILES_ROOT = 9,
+  TRUSTY_BLOCKTYPE_CHECKPOINT_FREE_ROOT = 10,
+};
+
+struct metrics_report_storage_error_req {
+    enum trusty_storage_error_type error;
+    char app_id[UUID_STR_SIZE];
+    char client_app_id[UUID_STR_SIZE];
+    uint32_t write;
+    enum trusty_file_system file_system;
+    uint64_t file_path_hash;
+    enum trusty_block_type block_type;
+    uint64_t repair_counter;
+} __attribute__((__packed__));
+
+void do_error_report(enum trusty_storage_error_type type,
                      const char* fs_name,
-                     enum error_report_block_type block_type);
+                     enum trusty_block_type block_type);
+
+int connect_metrics_ta(void);
 
 static inline void error_report_superblock_invalid(const char* fs_name) {
     do_error_report(TRUSTY_STORAGE_ERROR_SUPERBLOCK_INVALID, fs_name,
-                    BLOCK_TYPE_UNKNOWN);
+                    TRUSTY_BLOCKTYPE_UNKNOWN);
 }
 
 static inline void error_report_block_mac_mismatch(
         const char* fs_name,
-        enum error_report_block_type block_type) {
+        enum trusty_block_type block_type) {
     do_error_report(TRUSTY_STORAGE_ERROR_BLOCK_MAC_MISMATCH, fs_name,
                     block_type);
 }
 
 static inline void error_report_rpmb_counter_mismatch(void) {
     do_error_report(TRUSTY_STORAGE_ERROR_RPMB_COUNTER_MISMATCH, "unknown",
-                    BLOCK_TYPE_UNKNOWN);
+                    TRUSTY_BLOCKTYPE_UNKNOWN);
 }
 
 static inline void error_report_rpmb_counter_mismatch_recovered(void) {
     do_error_report(TRUSTY_STORAGE_ERROR_RPMB_COUNTER_MISMATCH_RECOVERED,
-                    "unknown", BLOCK_TYPE_UNKNOWN);
+                    "unknown", TRUSTY_BLOCKTYPE_UNKNOWN);
 }
 
 static inline void error_report_rpmb_counter_read_failure(void) {
     do_error_report(TRUSTY_STORAGE_ERROR_RPMB_COUNTER_READ_FAILURE, "unknown",
-                    BLOCK_TYPE_UNKNOWN);
+                    TRUSTY_BLOCKTYPE_UNKNOWN);
 }
 
 static inline void error_report_rpmb_mac_mismatch(void) {
     do_error_report(TRUSTY_STORAGE_ERROR_RPMB_MAC_MISMATCH, "unknown",
-                    BLOCK_TYPE_UNKNOWN);
+                    TRUSTY_BLOCKTYPE_UNKNOWN);
 }
 
 static inline void error_report_rpmb_addr_mismatch(void) {
     do_error_report(TRUSTY_STORAGE_ERROR_RPMB_ADDR_MISMATCH, "unknown",
-                    BLOCK_TYPE_UNKNOWN);
+                    TRUSTY_BLOCKTYPE_UNKNOWN);
 }
