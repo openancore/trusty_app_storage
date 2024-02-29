@@ -15,4 +15,4 @@
 
 TRUSTY_USER_TESTS += \
 	trusty/user/app/storage/test/storage-unittest \
-
+	trusty/user/app/storage/test/storage-benchmark
