@@ -22,6 +22,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <lib/tipc/tipc.h>
+#include <lk/err_ptr.h>
 #include <trusty_unittest.h>
 
 #include "block_cache.h"
@@ -38,6 +40,7 @@
 
 static struct key storage_test_key;
 static struct block_device_tipc test_block_device;
+static struct tipc_hset* hset;
 
 static bool print_test_verbose = false;
 
@@ -501,7 +504,7 @@ TEST_P(StorageTest, FailRpmbVerify) {
      */
     transaction_free(&_state->tr);
     block_device_tipc_uninit(&test_block_device);
-    rc = block_device_tipc_init(&test_block_device, null_handle,
+    rc = block_device_tipc_init(hset, &test_block_device, null_handle,
                                 &storage_test_key, NULL, null_handle);
     ASSERT_EQ(rc, 0);
     transaction_init(&_state->tr, *((struct fs**)GetParam()), true);
@@ -642,7 +645,7 @@ TEST_P(StorageTest, DesyncBackingFile) {
     transaction_free(&_state->tr);
 
     block_device_tipc_uninit(&test_block_device);
-    rc = block_device_tipc_init(&test_block_device, null_handle,
+    rc = block_device_tipc_init(hset, &test_block_device, null_handle,
                                 &storage_test_key, NULL, null_handle);
     ASSERT_EQ(rc, 0);
     transaction_init(&_state->tr, fs, true);
@@ -735,7 +738,7 @@ TEST_P(StorageTest, CorruptFileInfo) {
 
     /* remount the filesystem to clear the block cache */
     block_device_tipc_uninit(&test_block_device);
-    rc = block_device_tipc_init(&test_block_device, null_handle,
+    rc = block_device_tipc_init(hset, &test_block_device, null_handle,
                                 &storage_test_key, NULL, null_handle);
     ASSERT_EQ(rc, 0);
     transaction_init(&_state->tr, fs, true);
@@ -748,7 +751,7 @@ TEST_P(StorageTest, CorruptFileInfo) {
     transaction_free(&_state->tr);
 
     block_device_tipc_uninit(&test_block_device);
-    rc = block_device_tipc_init(&test_block_device, null_handle,
+    rc = block_device_tipc_init(hset, &test_block_device, null_handle,
                                 &storage_test_key, NULL, null_handle);
     ASSERT_EQ(rc, 0);
     transaction_init(&_state->tr, fs, true);
@@ -813,7 +816,11 @@ int main(int argc, const char* argv[]) {
     if (!init_rpmb_state(dir)) {
         goto err;
     }
-    rc = block_device_tipc_init(&test_block_device, null_handle,
+    hset = tipc_hset_create();
+    if (IS_ERR(hset)) {
+        fprintf(stderr, "%s: tipc_hset_create failed (%d)\n", __func__, rc);
+    }
+    rc = block_device_tipc_init(hset, &test_block_device, null_handle,
                                 &storage_test_key, NULL, null_handle);
     if (rc < 0) {
         fprintf(stderr, "%s: block_device_tipc_init failed (%d)\n", __func__,

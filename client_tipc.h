@@ -13,8 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <lib/tipc/tipc.h>
 
 #include "ipc.h"
 
-int client_create_port(struct ipc_port_context* client_ctx,
+int client_create_port(struct tipc_hset* hset,
+                       struct ipc_port_context* client_ctx,
                        const char* port_name);

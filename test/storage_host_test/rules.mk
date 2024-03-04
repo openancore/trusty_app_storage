@@ -52,6 +52,7 @@ HOST_INCLUDE_DIRS += \
 	trusty/user/base/interface/system_state/include \
 	trusty/user/base/lib/hwkey/include \
 	trusty/user/base/lib/system_state/include \
+	trusty/user/base/lib/tipc/include \
 
 # Turn on FULL_ASSERTs
 HOST_FLAGS := -DBUILD_STORAGE_TEST=1
