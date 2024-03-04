@@ -351,6 +351,116 @@ test_abort:;
 // Moving file and opening directory is not supported in fake secure
 // storage implementation.
 
+static int DeleteAllFiles(storage_session_t ss) {
+    int rc;
+    struct storage_open_dir_state* dir;
+    char file_name_dir[64];
+    uint8_t read_dir_flags;
+    int deleted = 0;
+
+    // read all test files and delete
+    rc = storage_open_dir(ss, "", &dir);
+    if (rc != 0) {
+        return rc;
+    }
+
+    while (true) {
+        rc = storage_read_dir(ss, dir, &read_dir_flags, file_name_dir,
+                              sizeof(file_name_dir));
+        if (rc == 0)
+            break;
+        if (rc < 0) {
+            deleted = rc;
+            goto cleanup;
+        }
+        if ((read_dir_flags & STORAGE_FILE_LIST_STATE_MASK) !=
+            STORAGE_FILE_LIST_REMOVED) {
+            rc = storage_delete_file(ss, file_name_dir, 0);
+            if (rc != 0) {
+                deleted = rc;
+                goto cleanup;
+            }
+            deleted++;
+        }
+    }
+
+    rc = storage_end_transaction(ss, true);
+    if (rc != 0) {
+        deleted = rc;
+        goto cleanup;
+    }
+
+cleanup:
+    storage_close_dir(ss, dir);
+
+    return deleted;
+}
+
+TEST_F(StorageTest, ReadAndDelete) {
+    int rc;
+    file_handle_t handle;
+    const char* fname_pat = "test_read_and_delete_%03d_file";
+    char file_name[64];
+    struct storage_open_dir_state* dir;
+    char file_name_dir[64];
+    uint8_t read_dir_flags;
+    int i;
+    int file_count = 100;
+
+    // clean up dir before the test
+    rc = DeleteAllFiles(ss);
+    ASSERT_LE(0, rc, "cleanup");
+
+    // make sure test files do not exist (expect ERR_NOT_FOUND)
+    for (i = 0; i < file_count; i++) {
+        snprintf(file_name, sizeof(file_name), fname_pat, i);
+        rc = storage_delete_file(ss, file_name, STORAGE_OP_COMPLETE);
+        ASSERT_EQ(ERR_NOT_FOUND, rc, "exists before test");
+    }
+
+    // create test files
+    for (i = 0; i < file_count; i++) {
+        snprintf(file_name, sizeof(file_name), fname_pat, i);
+        rc = storage_open_file(
+                ss, &handle, file_name,
+                STORAGE_FILE_OPEN_CREATE | STORAGE_FILE_OPEN_CREATE_EXCLUSIVE,
+                STORAGE_OP_COMPLETE);
+        ASSERT_EQ(0, rc, "create test file");
+
+        // close it
+        storage_close_file(handle);
+    }
+
+    // delete all files by reading the dir
+    rc = DeleteAllFiles(ss);
+    ASSERT_EQ(file_count, rc, "delete_all");
+
+    // test empty dir
+    rc = storage_open_dir(ss, "", &dir);
+    ASSERT_EQ(0, rc, "open_dir");
+
+    rc = storage_read_dir(ss, dir, &read_dir_flags, file_name_dir,
+                          sizeof(file_name_dir));
+    ASSERT_EQ(0, rc, "read_dir");
+    ASSERT_EQ(STORAGE_FILE_LIST_END,
+              read_dir_flags & STORAGE_FILE_LIST_STATE_MASK, "dir flags");
+
+    storage_close_dir(ss, dir);
+
+    // make sure test files do not exist (expect ERR_NOT_FOUND)
+    for (i = 0; i < file_count; i++) {
+        snprintf(file_name, sizeof(file_name), fname_pat, i);
+        rc = storage_delete_file(ss, file_name, STORAGE_OP_COMPLETE);
+        ASSERT_EQ(ERR_NOT_FOUND, rc, "delete after test");
+    }
+
+test_abort:
+    for (i = 0; i < file_count; i++) {
+        snprintf(file_name, sizeof(file_name), fname_pat, i);
+        rc = storage_delete_file(ss, file_name, STORAGE_OP_COMPLETE);
+    }
+}
+
 TEST_F(StorageTest, CreateMoveDelete) {
     int rc;
     file_handle_t handle;
@@ -446,15 +556,11 @@ TEST_F(StorageTest, FileList) {
     int i;
     int file_count = 100;
 
-    // make sure test file does not exist (expect success or ERR_NOT_FOUND)
-    for (i = 0; i < file_count; i++) {
-        snprintf(file_name, sizeof(file_name), fname_pat, i);
-        rc = storage_delete_file(ss, file_name, STORAGE_OP_COMPLETE);
-        rc = (rc == ERR_NOT_FOUND) ? 0 : rc;
-        ASSERT_EQ(0, rc, "delete test file1");
-    }
+    // clean up dir before the test
+    rc = DeleteAllFiles(ss);
+    ASSERT_LE(0, rc, "cleanup");
 
-    // one more time (expect ERR_NOT_FOUND)
+    // make sure test files do not exist (expect ERR_NOT_FOUND)
     for (i = 0; i < file_count; i++) {
         snprintf(file_name, sizeof(file_name), fname_pat, i);
         rc = storage_delete_file(ss, file_name, STORAGE_OP_COMPLETE);
