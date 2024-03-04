@@ -554,34 +554,25 @@ done:
 }
 
 static enum storage_err storage_file_close(
-        struct storage_msg* msg,
-        struct storage_file_close_req* req,
-        size_t req_size,
-        struct storage_client_session* session) {
+        struct storage_client_session* session,
+        uint32_t handle,
+        struct storage_op_flags flags) {
     struct file_handle* file;
 
-    if (req_size < sizeof(*req)) {
-        SS_ERR("%s: invalid request size (%zu)\n", __func__, req_size);
+    file = get_file_handle(session, handle);
+    if (!file) {
         return STORAGE_ERR_NOT_VALID;
     }
 
-    file = get_file_handle(session, req->handle);
-    if (!file)
-        return STORAGE_ERR_NOT_VALID;
-
     file_close(file);
+    free_file_handle(session, handle);
 
-    free_file_handle(session, req->handle);
-
-    if (msg->flags & STORAGE_MSG_FLAG_TRANSACT_COMPLETE) {
-        transaction_complete_etc(
-                &session->tr,
-                msg->flags & STORAGE_MSG_FLAG_TRANSACT_CHECKPOINT);
+    if (flags.complete_transaction) {
+        transaction_complete_etc(&session->tr, flags.update_checkpoint);
         if (session->tr.failed) {
             SS_ERR("%s: transaction commit failed\n", __func__);
             return STORAGE_ERR_GENERIC;
         }
-        return STORAGE_NO_ERROR;
     }
 
     return STORAGE_NO_ERROR;
@@ -1148,6 +1139,19 @@ static enum storage_err storage_tipc_file_move(
             extract_storage_op_flags(msg->flags));
 }
 
+static enum storage_err storage_tipc_file_close(
+        struct storage_client_session* session,
+        struct storage_msg* msg,
+        struct storage_file_close_req* req,
+        size_t req_size) {
+    if (req_size != sizeof(*req)) {
+        SS_ERR("%s: invalid request size (%zu)\n", __func__, req_size);
+        return STORAGE_ERR_NOT_VALID;
+    }
+    return storage_file_close(session, req->handle,
+                              extract_storage_op_flags(msg->flags));
+}
+
 static struct storage_tipc_client_session* chan_context_to_client_session(
         struct ipc_channel_context* ctx) {
     assert(ctx != NULL);
@@ -1351,7 +1355,7 @@ static int client_handle_msg(struct ipc_channel_context* ctx,
     case STORAGE_FILE_OPEN:
         return storage_file_open(msg, payload, payload_len, tipc_session);
     case STORAGE_FILE_CLOSE:
-        result = storage_file_close(msg, payload, payload_len, session);
+        result = storage_tipc_file_close(session, msg, payload, payload_len);
         break;
     case STORAGE_FILE_WRITE:
         result = storage_file_write(msg, payload, payload_len, session);
