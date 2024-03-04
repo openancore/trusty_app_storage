@@ -993,7 +993,7 @@ static bool fs_check_file(struct file_iterate_state* iter,
     struct fs_check_state* fs_check_state =
             containerof(iter, struct fs_check_state, iter);
     struct obj_ref info_ref = OBJ_REF_INITIAL_VALUE(info_ref);
-    struct file_handle file;
+    struct storage_file_handle file;
     char path[FS_PATH_MAX];
 
     assert(!tr->failed);
