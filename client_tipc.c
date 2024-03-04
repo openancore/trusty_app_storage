@@ -19,19 +19,20 @@
 #include <assert.h>
 #include <errno.h>
 #include <inttypes.h>
-#include <lk/list.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <uapi/err.h>
-
-#include <openssl/mem.h>
 
 #include <interface/storage/storage.h>
 #include <lib/system_state/system_state.h>
 #include <lib/tipc/tipc.h>
+#include <lk/list.h>
+#include <openssl/mem.h>
+#include <uapi/err.h>
 
+#include "client_session.h"
 #include "client_session_tipc.h"
 #include "file.h"
 #include "ipc.h"
@@ -57,7 +58,7 @@ static int client_handle_msg(struct ipc_channel_context* ctx,
                              void* msg,
                              size_t msg_size);
 static void client_disconnect(struct ipc_channel_context* context);
-static int send_response(struct storage_client_session* session,
+static int send_response(struct storage_tipc_client_session* tipc_session,
                          enum storage_err result,
                          struct storage_msg* msg,
                          void* out,
@@ -490,9 +491,10 @@ static enum storage_err storage_file_move(
 static int storage_file_open(struct storage_msg* msg,
                              struct storage_file_open_req* req,
                              size_t req_size,
-                             struct storage_client_session* session)
+                             struct storage_tipc_client_session* tipc_session)
 
 {
+    struct storage_client_session* session = &tipc_session->session;
     enum file_op_result open_result;
     enum storage_err result;
     struct file_handle* file = NULL;
@@ -596,7 +598,7 @@ err_invalid_name:
 err_invalid_mask:
 err_invalid_size:
 done:
-    return send_response(session, result, msg, out, out_size);
+    return send_response(tipc_session, result, msg, out, out_size);
 }
 
 static enum storage_err storage_file_close(
@@ -636,7 +638,8 @@ static enum storage_err storage_file_close(
 static int storage_file_read(struct storage_msg* msg,
                              struct storage_file_read_req* req,
                              size_t req_size,
-                             struct storage_client_session* session) {
+                             struct storage_tipc_client_session* tipc_session) {
+    struct storage_client_session* session = &tipc_session->session;
     enum storage_err result = STORAGE_NO_ERROR;
     void* bufp = NULL;
     size_t buflen;
@@ -725,7 +728,7 @@ static int storage_file_read(struct storage_msg* msg,
 
 err_get_block:
 err_invalid_input:
-    return send_response(session, result, msg, out, out_size);
+    return send_response(tipc_session, result, msg, out, out_size);
 }
 
 static enum storage_err storage_create_gap(
@@ -933,7 +936,8 @@ static bool storage_file_list_iter(struct file_iterate_state* iter,
 static int storage_file_list(struct storage_msg* msg,
                              struct storage_file_list_req* req,
                              size_t req_size,
-                             struct storage_client_session* session) {
+                             struct storage_tipc_client_session* tipc_session) {
+    struct storage_client_session* session = &tipc_session->session;
     enum storage_err result = STORAGE_NO_ERROR;
     void* out = NULL;
     size_t out_size = 0;
@@ -1024,13 +1028,15 @@ err_invalid_filename:
 err_invalid_state:
 err_get_path_prefix:
 err_invalid_input:
-    return send_response(session, result, msg, out, out_size);
+    return send_response(tipc_session, result, msg, out, out_size);
 }
 
-static int storage_file_get_size(struct storage_msg* msg,
-                                 struct storage_file_get_size_req* req,
-                                 size_t req_size,
-                                 struct storage_client_session* session) {
+static int storage_file_get_size(
+        struct storage_msg* msg,
+        struct storage_file_get_size_req* req,
+        size_t req_size,
+        struct storage_tipc_client_session* tipc_session) {
+    struct storage_client_session* session = &tipc_session->session;
     bool valid;
     struct file_handle* file;
     enum storage_err result = STORAGE_NO_ERROR;
@@ -1063,7 +1069,7 @@ static int storage_file_get_size(struct storage_msg* msg,
     out_size = sizeof(resp);
 
 err_invalid_input:
-    return send_response(session, result, msg, out, out_size);
+    return send_response(tipc_session, result, msg, out, out_size);
 }
 
 static enum storage_err storage_file_set_size(
@@ -1122,14 +1128,15 @@ static enum storage_err storage_file_set_size(
     return STORAGE_NO_ERROR;
 }
 
-static struct storage_client_session* chan_context_to_client_session(
+static struct storage_tipc_client_session* chan_context_to_client_session(
         struct ipc_channel_context* ctx) {
     assert(ctx != NULL);
-    struct storage_client_session* session;
+    struct storage_tipc_client_session* tipc_session;
 
-    session = containerof(ctx, struct storage_client_session, context);
-    assert(session->magic == STORAGE_CLIENT_SESSION_MAGIC);
-    return session;
+    tipc_session =
+            containerof(ctx, struct storage_tipc_client_session, chan_ctx);
+    assert(tipc_session->session.magic == STORAGE_CLIENT_SESSION_MAGIC);
+    return tipc_session;
 }
 
 static struct client_port_context* port_context_to_client_port_context(
@@ -1149,18 +1156,19 @@ static struct ipc_channel_context* client_connect(
         const uuid_t* peer_uuid,
         handle_t chan_handle) {
     struct client_port_context* client_port_context;
-    struct storage_client_session* client_session;
+    struct storage_tipc_client_session* client_tipc_session;
 
     client_port_context = port_context_to_client_port_context(parent_ctx);
 
-    client_session = calloc(1, sizeof(*client_session));
-    if (client_session == NULL) {
+    client_tipc_session = calloc(1, sizeof(*client_tipc_session));
+    if (client_tipc_session == NULL) {
         SS_ERR("out of memory allocating client session\n");
         return NULL;
     }
 
+    struct storage_client_session* client_session =
+            &client_tipc_session->session;
     client_session->magic = STORAGE_CLIENT_SESSION_MAGIC;
-
     client_session->files = NULL;
     client_session->files_count = 0;
 
@@ -1169,14 +1177,16 @@ static struct ipc_channel_context* client_connect(
     /* cache identity information */
     memcpy(&client_session->uuid, peer_uuid, sizeof(*peer_uuid));
 
-    client_channel_ops_init(&client_session->context.ops);
-    return &client_session->context;
+    client_channel_ops_init(&client_tipc_session->chan_ctx.ops);
+    return &client_tipc_session->chan_ctx;
 }
 
 static void client_disconnect(struct ipc_channel_context* context) {
+    struct storage_tipc_client_session* tipc_session;
     struct storage_client_session* session;
 
-    session = chan_context_to_client_session(context);
+    tipc_session = chan_context_to_client_session(context);
+    session = &tipc_session->session;
 
     if (list_in_list(&session->tr.allocated.node) && !session->tr.failed) {
         transaction_fail(&session->tr); /* discard partial transaction */
@@ -1184,11 +1194,11 @@ static void client_disconnect(struct ipc_channel_context* context) {
     session_close_all_files(session);
     transaction_free(&session->tr);
 
-    OPENSSL_cleanse(session, sizeof(struct storage_client_session));
-    free(session);
+    OPENSSL_cleanse(tipc_session, sizeof(struct storage_tipc_client_session));
+    free(tipc_session);
 }
 
-static int send_response(struct storage_client_session* session,
+static int send_response(struct storage_tipc_client_session* tipc_session,
                          enum storage_err result,
                          struct storage_msg* msg,
                          void* out,
@@ -1218,30 +1228,32 @@ static int send_response(struct storage_client_session* session,
             .num_iov = resp_buf_count,
     };
 
-    return send_msg(session->context.common.handle, &resp_ipc_msg);
+    return send_msg(tipc_session->chan_ctx.common.handle, &resp_ipc_msg);
 }
 
-static int send_result(struct storage_client_session* session,
+static int send_result(struct storage_tipc_client_session* tipc_session,
                        struct storage_msg* msg,
                        enum storage_err result) {
-    return send_response(session, result, msg, NULL, 0);
+    return send_response(tipc_session, result, msg, NULL, 0);
 }
 
 static int client_handle_msg(struct ipc_channel_context* ctx,
                              void* msg_buf,
                              size_t msg_size) {
+    struct storage_tipc_client_session* tipc_session;
     struct storage_client_session* session;
     struct storage_msg* msg = msg_buf;
     size_t payload_len;
     enum storage_err result;
     void* payload;
 
-    session = chan_context_to_client_session(ctx);
+    tipc_session = chan_context_to_client_session(ctx);
+    session = &tipc_session->session;
 
     if (msg_size < sizeof(struct storage_msg)) {
         SS_ERR("%s: invalid message of size (%zu)\n", __func__, msg_size);
         struct storage_msg err_msg = {.cmd = STORAGE_RESP_MSG_ERR};
-        send_result(session, &err_msg, STORAGE_ERR_NOT_VALID);
+        send_result(tipc_session, &err_msg, STORAGE_ERR_NOT_VALID);
         return ERR_NOT_VALID; /* would force to close connection */
     }
 
@@ -1253,13 +1265,13 @@ static int client_handle_msg(struct ipc_channel_context* ctx,
             SS_ERR("%s: STORAGE_MSG_FLAG_TRANSACT_CHECKPOINT cannot "
                    "be used without STORAGE_MSG_FLAG_TRANSACT_COMPLETE\n",
                    __func__);
-            return send_result(session, msg, STORAGE_ERR_NOT_VALID);
+            return send_result(tipc_session, msg, STORAGE_ERR_NOT_VALID);
         }
 
         if (!checkpoint_update_allowed(&session->tr)) {
             SS_ERR("%s: Checkpoint requested but not currently allowed.\n",
                    __func__);
-            return send_result(session, msg, STORAGE_ERR_NOT_ALLOWED);
+            return send_result(tipc_session, msg, STORAGE_ERR_NOT_ALLOWED);
         }
     }
 
@@ -1281,9 +1293,9 @@ static int client_handle_msg(struct ipc_channel_context* ctx,
                 SS_ERR("%s: failed to complete transaction\n", __func__);
                 /* clear transaction failed state */
                 session->tr.failed = false;
-                return send_result(session, msg, STORAGE_ERR_TRANSACT);
+                return send_result(tipc_session, msg, STORAGE_ERR_TRANSACT);
             }
-            return send_result(session, msg, STORAGE_NO_ERROR);
+            return send_result(tipc_session, msg, STORAGE_NO_ERROR);
         } else {
             /* discard current transaction */
             if (transaction_is_active(&session->tr)) {
@@ -1291,7 +1303,7 @@ static int client_handle_msg(struct ipc_channel_context* ctx,
             }
             /* clear transaction failed state */
             session->tr.failed = false;
-            return send_result(session, msg, STORAGE_NO_ERROR);
+            return send_result(tipc_session, msg, STORAGE_NO_ERROR);
         }
     }
 
@@ -1301,7 +1313,7 @@ static int client_handle_msg(struct ipc_channel_context* ctx,
              * return error */
             session->tr.failed = false;
         }
-        return send_result(session, msg, STORAGE_ERR_TRANSACT);
+        return send_result(tipc_session, msg, STORAGE_ERR_TRANSACT);
     }
 
     if (!transaction_is_active(&session->tr)) {
@@ -1317,7 +1329,7 @@ static int client_handle_msg(struct ipc_channel_context* ctx,
         result = storage_file_move(msg, payload, payload_len, session);
         break;
     case STORAGE_FILE_OPEN:
-        return storage_file_open(msg, payload, payload_len, session);
+        return storage_file_open(msg, payload, payload_len, tipc_session);
     case STORAGE_FILE_CLOSE:
         result = storage_file_close(msg, payload, payload_len, session);
         break;
@@ -1325,11 +1337,11 @@ static int client_handle_msg(struct ipc_channel_context* ctx,
         result = storage_file_write(msg, payload, payload_len, session);
         break;
     case STORAGE_FILE_READ:
-        return storage_file_read(msg, payload, payload_len, session);
+        return storage_file_read(msg, payload, payload_len, tipc_session);
     case STORAGE_FILE_LIST:
-        return storage_file_list(msg, payload, payload_len, session);
+        return storage_file_list(msg, payload, payload_len, tipc_session);
     case STORAGE_FILE_GET_SIZE:
-        return storage_file_get_size(msg, payload, payload_len, session);
+        return storage_file_get_size(msg, payload, payload_len, tipc_session);
     case STORAGE_FILE_SET_SIZE:
         result = storage_file_set_size(msg, payload, payload_len, session);
         break;
@@ -1339,7 +1351,7 @@ static int client_handle_msg(struct ipc_channel_context* ctx,
         break;
     }
 
-    return send_result(session, msg, result);
+    return send_result(tipc_session, msg, result);
 }
 
 int client_create_port(struct tipc_hset* hset,
