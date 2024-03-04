@@ -60,8 +60,14 @@ MODULE_SRCS += \
 	$(SCUDO_DIR)/standalone/report_linux.cpp \
 	$(SCUDO_DIR)/standalone/string_utils.cpp \
 	$(SCUDO_DIR)/standalone/trusty.cpp \
-	$(SCUDO_DIR)/standalone/rss_limit_checker.cpp \
 	$(LOCAL_DIR)/wrappers.cpp
+
+# TODO (b/305723343): Only include rss_limit_checker.cpp if it exists, since upstream
+# removed it recently. When it's completely gone everywhere, we can
+# come back and delete this.
+ifneq (,$(wildcard $(SCUDO_DIR)/standalone/rss_limit_checker.cpp))
+MODULE_SRCS += $(SCUDO_DIR)/standalone/rss_limit_checker.cpp
+endif
 
 # Add dependency on syscall-stubs
 MODULE_LIBRARY_DEPS += trusty/user/base/lib/syscall-stubs
