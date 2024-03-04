@@ -63,6 +63,9 @@ static int send_response(struct storage_tipc_client_session* tipc_session,
                          struct storage_msg* msg,
                          void* out,
                          size_t out_size);
+static int send_result(struct storage_tipc_client_session* tipc_session,
+                       struct storage_msg* msg,
+                       enum storage_err result);
 
 /**
  * checkpoint_update_allowed - Is checkpoint modification currently allowed?
@@ -440,78 +443,50 @@ static enum storage_err storage_file_move(
     return STORAGE_NO_ERROR;
 }
 
-static int storage_file_open(struct storage_msg* msg,
-                             struct storage_file_open_req* req,
-                             size_t req_size,
-                             struct storage_tipc_client_session* tipc_session)
-
-{
-    struct storage_client_session* session = &tipc_session->session;
+static enum storage_err storage_file_open(
+        struct storage_client_session* session,
+        const char* fname,
+        size_t fname_len,
+        enum file_create_mode file_create_mode,
+        bool truncate,
+        struct storage_op_flags flags,
+        uint32_t* handle) {
     enum file_op_result open_result;
     enum storage_err result;
     struct file_handle* file = NULL;
-    const char* fname;
-    size_t fname_len;
-    uint32_t flags, f_handle;
+    uint32_t f_handle;
     char path_buf[FS_PATH_MAX];
-    void* out = NULL;
-    size_t out_size = 0;
-    enum file_create_mode file_create_mode;
-
-    if (req_size < sizeof(*req)) {
-        SS_ERR("%s: invalid request size (%zu)\n", __func__, req_size);
-        result = STORAGE_ERR_NOT_VALID;
-        goto err_invalid_size;
-    }
-
-    flags = req->flags;
-    if ((flags & ~STORAGE_FILE_OPEN_MASK) != 0) {
-        SS_ERR("%s: invalid flags 0x%" PRIx32 "\n", __func__, flags);
-        result = STORAGE_ERR_NOT_VALID;
-        goto err_invalid_mask;
-    }
 
     /* make sure filename is legal */
-    fname = req->name;
-    fname_len = req_size - sizeof(*req);
     if (!is_valid_name(fname, fname_len)) {
         SS_ERR("%s: invalid filename\n", __func__);
-        result = STORAGE_ERR_NOT_VALID;
-        goto err_invalid_name;
+        return STORAGE_ERR_NOT_VALID;
     }
 
     result = get_path(path_buf, sizeof(path_buf), &session->uuid, fname,
                       fname_len);
     if (result != STORAGE_NO_ERROR) {
-        goto err_get_path;
+        return result;
     }
 
-    SS_INFO("%s: path %s flags 0x%" PRIx32 "\n", __func__, path_buf, flags);
+    SS_INFO("%s: path %s (create_mode: %d, truncate: %d)\n", __func__, path_buf,
+            file_create_mode, truncate);
 
     SS_INFO("%s: call create_file_handle\n", __func__);
     /* alloc file info struct */
     result = create_file_handle(session, &f_handle, &file);
-    if (result != STORAGE_NO_ERROR)
-        goto err_create_file_handle;
-
-    if (flags & STORAGE_FILE_OPEN_CREATE) {
-        if (flags & STORAGE_FILE_OPEN_CREATE_EXCLUSIVE) {
-            file_create_mode = FILE_OPEN_CREATE_EXCLUSIVE;
-        } else {
-            file_create_mode = FILE_OPEN_CREATE;
-        }
-    } else {
-        file_create_mode = FILE_OPEN_NO_CREATE;
+    if (result != STORAGE_NO_ERROR) {
+        return result;
     }
 
     open_result = file_open(&session->tr, path_buf, file, file_create_mode,
-                            msg->flags & STORAGE_MSG_FLAG_FS_REPAIRED_ACK);
+                            flags.allow_repaired);
     if (open_result != FILE_OP_SUCCESS) {
         result = file_op_result_to_storage_err(open_result);
         goto err_open_file;
     }
 
-    if ((flags & STORAGE_FILE_OPEN_TRUNCATE) && file->size) {
+    if (truncate && file->size) {
         file_set_size(&session->tr, file, 0);
     }
 
@@ -521,10 +496,8 @@ static int storage_file_open(struct storage_msg* msg,
         goto err_transaction_failed;
     }
 
-    if (msg->flags & STORAGE_MSG_FLAG_TRANSACT_COMPLETE) {
-        transaction_complete_etc(
-                &session->tr,
-                msg->flags & STORAGE_MSG_FLAG_TRANSACT_CHECKPOINT);
+    if (flags.complete_transaction) {
+        transaction_complete_etc(&session->tr, flags.update_checkpoint);
         if (session->tr.failed) {
             SS_ERR("%s: transaction commit failed\n", __func__);
             result = STORAGE_ERR_GENERIC;
@@ -532,25 +505,14 @@ static int storage_file_open(struct storage_msg* msg,
         }
     }
 
-    struct storage_file_open_resp resp = {.handle = f_handle};
-
-    out = &resp;
-    out_size = sizeof(resp);
-
-    result = STORAGE_NO_ERROR;
-    goto done;
+    *handle = f_handle;
+    return STORAGE_NO_ERROR;
 
 err_transaction_failed:
     file_close(file);
 err_open_file:
     free_file_handle(session, f_handle);
-err_create_file_handle:
-err_get_path:
-err_invalid_name:
-err_invalid_mask:
-err_invalid_size:
-done:
-    return send_response(tipc_session, result, msg, out, out_size);
+    return result;
 }
 
 static enum storage_err storage_file_close(
@@ -1111,6 +1073,41 @@ static enum storage_err storage_tipc_file_move(
             extract_storage_op_flags(msg->flags));
 }
 
+static enum storage_err storage_tipc_file_open(
+        struct storage_tipc_client_session* tipc_session,
+        struct storage_msg* msg,
+        struct storage_file_open_req* req,
+        size_t req_size) {
+    if (req_size < sizeof(*req)) {
+        SS_ERR("%s: invalid request size (%zu)\n", __func__, req_size);
+        return send_result(tipc_session, msg, STORAGE_ERR_NOT_VALID);
+    }
+
+    if ((req->flags & ~STORAGE_FILE_OPEN_MASK) != 0) {
+        SS_ERR("%s: invalid flags 0x%" PRIx32 "\n", __func__, req->flags);
+        return send_result(tipc_session, msg, STORAGE_ERR_NOT_VALID);
+    }
+
+    enum file_create_mode file_create_mode;
+    if (req->flags & STORAGE_FILE_OPEN_CREATE) {
+        file_create_mode = req->flags & STORAGE_FILE_OPEN_CREATE_EXCLUSIVE
+                                   ? FILE_OPEN_CREATE_EXCLUSIVE
+                                   : FILE_OPEN_CREATE;
+    } else {
+        file_create_mode = FILE_OPEN_NO_CREATE;
+    }
+
+    struct storage_file_open_resp resp;
+    enum storage_err result = storage_file_open(
+            &tipc_session->session, req->name, req_size - sizeof(*req),
+            file_create_mode, req->flags & STORAGE_FILE_OPEN_TRUNCATE,
+            extract_storage_op_flags(msg->flags), &resp.handle);
+    if (result != STORAGE_NO_ERROR) {
+        return send_result(tipc_session, msg, result);
+    }
+    return send_response(tipc_session, result, msg, &resp, sizeof(resp));
+}
+
 static enum storage_err storage_tipc_file_close(
         struct storage_client_session* session,
         struct storage_msg* msg,
@@ -1352,7 +1349,7 @@ static int client_handle_msg(struct ipc_channel_context* ctx,
         result = storage_tipc_file_move(session, msg, payload, payload_len);
         break;
     case STORAGE_FILE_OPEN:
-        return storage_file_open(msg, payload, payload_len, tipc_session);
+        return storage_tipc_file_open(tipc_session, msg, payload, payload_len);
     case STORAGE_FILE_CLOSE:
         result = storage_tipc_file_close(session, msg, payload, payload_len);
         break;
