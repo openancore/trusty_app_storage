@@ -60,7 +60,8 @@ MODULE_SRCS += \
 	$(SCUDO_DIR)/standalone/report_linux.cpp \
 	$(SCUDO_DIR)/standalone/string_utils.cpp \
 	$(SCUDO_DIR)/standalone/trusty.cpp \
-	$(LOCAL_DIR)/wrappers.cpp
+	$(LOCAL_DIR)/wrappers_c_copy.cpp \
+	$(LOCAL_DIR)/wrappers_cpp_copy.cpp \
 
 # TODO (b/305723343): Only include rss_limit_checker.cpp if it exists, since upstream
 # removed it recently. When it's completely gone everywhere, we can
