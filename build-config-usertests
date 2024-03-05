@@ -56,4 +56,5 @@
         ],
         storage_full=True,
     ),
+    porttest("com.android.trusty.storage.bench").type(BENCHMARK).needs(storage_full=True),
 ]
