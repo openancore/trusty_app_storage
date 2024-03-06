@@ -955,6 +955,10 @@ enum file_op_result file_iterate(struct transaction* tr,
         }
 
         stop = state->file(state, tr, &block_mac, added, removed);
+
+        if (tr->failed) {
+            return FILE_OP_ERR_FAILED;
+        }
         if (stop) {
             return FILE_OP_SUCCESS;
         }
