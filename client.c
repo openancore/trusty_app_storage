@@ -906,6 +906,11 @@ static bool storage_file_list_iter(struct file_iterate_state* iter,
     struct obj_ref ref = OBJ_REF_INITIAL_VALUE(ref);
 
     file_info = file_get_info(tr, block_mac, &ref);
+    if (!file_info) {
+        printf("can't read file entry at %" PRIu64 "\n",
+               block_mac_to_block(tr, block_mac));
+        return true;
+    }
 
     if (strncmp(file_info->path, miter->prefix, miter->prefix_len) == 0) {
         storage_file_list_add(miter,
