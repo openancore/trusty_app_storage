@@ -70,8 +70,10 @@ static void rpmb_dprint_buf(const char* prefix,
         if (i && i % 32 == 0) {
             rpmb_dprintf("\n");
             j = strlen(prefix);
-            while (j--)
+            while (j) {
                 rpmb_dprintf(" ");
+                j--;
+            }
         }
         rpmb_dprintf(" %02x", buf[i]);
     }
