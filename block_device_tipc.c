@@ -32,6 +32,7 @@
 #include <openssl/mem.h>
 #include <openssl/rand.h>
 
+#include "aidl_service.h"
 #include "block_cache.h"
 #include "client_tipc.h"
 #include "fs.h"
@@ -469,8 +470,9 @@ static int check_storage_size(handle_t handle,
     return ret;
 }
 
-int block_device_tipc_init(struct tipc_hset* hset,
-                           struct block_device_tipc* state,
+int block_device_tipc_init(struct block_device_tipc* state,
+                           struct tipc_hset* hset,
+                           struct storage_service_aidl_context* aidl_ctx,
                            handle_t ipc_handle,
                            const struct key* fs_key,
                            const struct rpmb_key* rpmb_key,
@@ -498,6 +500,7 @@ int block_device_tipc_init(struct tipc_hset* hset,
     rpmb_part2_base += rpmb_part_sb_ns_block_count;
 #endif
     state->ipc_handle = ipc_handle;
+    state->aidl_ctx = aidl_ctx;
 
     /* init rpmb */
     ret = rpmb_init(&state->rpmb_state, &state->ipc_handle);
@@ -546,6 +549,8 @@ int block_device_tipc_init(struct tipc_hset* hset,
 
     state->fs_rpmb.tr_state = &state->tr_state_rpmb;
 
+    storage_aidl_enable_filesystem(aidl_ctx, state->fs_rpmb.tr_state,
+                                   STORAGE_AIDL_TP);
     ret = client_create_port(hset, &state->fs_rpmb.client_ctx,
                              STORAGE_CLIENT_TP_PORT);
     if (ret < 0) {
@@ -554,6 +559,8 @@ int block_device_tipc_init(struct tipc_hset* hset,
 
     state->fs_rpmb_boot.tr_state = &state->tr_state_rpmb;
 
+    storage_aidl_enable_filesystem(aidl_ctx, state->fs_rpmb_boot.tr_state,
+                                   STORAGE_AIDL_TDEA);
     ret = client_create_port(hset, &state->fs_rpmb_boot.client_ctx,
                              STORAGE_CLIENT_TDEA_PORT);
     if (ret < 0) {
@@ -653,6 +660,8 @@ int block_device_tipc_init(struct tipc_hset* hset,
     state->fs_tdp.tr_state = &state->tr_state_rpmb;
 #endif
 
+    storage_aidl_enable_filesystem(aidl_ctx, state->fs_tdp.tr_state,
+                                   STORAGE_AIDL_TDP);
     ret = client_create_port(hset, &state->fs_tdp.client_ctx,
                              STORAGE_CLIENT_TDP_PORT);
     if (ret < 0) {
@@ -689,6 +698,8 @@ int block_device_tipc_init(struct tipc_hset* hset,
         goto err_init_fs_ns_tr_state;
     }
 
+    storage_aidl_enable_filesystem(aidl_ctx, state->fs_ns.tr_state,
+                                   STORAGE_AIDL_TD);
     ret = client_create_port(hset, &state->fs_ns.client_ctx,
                              STORAGE_CLIENT_TD_PORT);
     if (ret < 0) {
@@ -748,6 +759,8 @@ int block_device_tipc_init(struct tipc_hset* hset,
     state->fs_nsp.tr_state = state->fs_tdp.tr_state;
 #endif
 
+    storage_aidl_enable_filesystem(aidl_ctx, state->fs_nsp.tr_state,
+                                   STORAGE_AIDL_NSP);
     ret = client_create_port(hset, &state->fs_nsp.client_ctx,
                              STORAGE_CLIENT_NSP_PORT);
     if (ret < 0) {
@@ -798,11 +811,13 @@ err_rpmb_init:
 
 void block_device_tipc_uninit(struct block_device_tipc* state) {
     if (state->dev_ns.dev.block_count) {
+        storage_aidl_disable_filesystem(state->aidl_ctx, STORAGE_AIDL_TD);
         ipc_port_destroy(&state->fs_ns.client_ctx);
         fs_destroy(&state->tr_state_ns);
         block_cache_dev_destroy(&state->dev_ns.dev);
         ns_close_file(state->ipc_handle, state->dev_ns.ns_handle);
 
+        storage_aidl_disable_filesystem(state->aidl_ctx, STORAGE_AIDL_TDP);
         ipc_port_destroy(&state->fs_tdp.client_ctx);
 #if HAS_FS_TDP
         fs_destroy(&state->tr_state_ns_tdp);
@@ -810,6 +825,7 @@ void block_device_tipc_uninit(struct block_device_tipc* state) {
         ns_close_file(state->ipc_handle, state->dev_ns_tdp.ns_handle);
 #endif
 
+        storage_aidl_disable_filesystem(state->aidl_ctx, STORAGE_AIDL_NSP);
         ipc_port_destroy(&state->fs_nsp.client_ctx);
 #if HAS_FS_NSP
         fs_destroy(&state->tr_state_ns_nsp);
@@ -817,7 +833,9 @@ void block_device_tipc_uninit(struct block_device_tipc* state) {
         ns_close_file(state->ipc_handle, state->dev_ns_nsp.ns_handle);
 #endif
     }
+    storage_aidl_disable_filesystem(state->aidl_ctx, STORAGE_AIDL_TDEA);
     ipc_port_destroy(&state->fs_rpmb_boot.client_ctx);
+    storage_aidl_disable_filesystem(state->aidl_ctx, STORAGE_AIDL_TP);
     ipc_port_destroy(&state->fs_rpmb.client_ctx);
     fs_destroy(&state->tr_state_rpmb);
     block_cache_dev_destroy(&state->dev_rpmb.dev);

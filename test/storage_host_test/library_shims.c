@@ -46,7 +46,7 @@ long hwkey_derive(hwkey_session_t session,
 }
 
 struct tipc_hset* tipc_hset_create() {
-    // block_device_tipc.c only passes this to create_client_port, where
+    // block_device_tipc.c only passes this to client_create_port, where
     // we're ignoring it.
     return NULL;
 }

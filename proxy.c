@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "proxy.h"
+
 #include <assert.h>
 #include <lk/list.h>  // for containerof
 #include <stdlib.h>
@@ -23,6 +25,7 @@
 #include <interface/storage/storage.h>
 #include <lib/hwkey/hwkey.h>
 
+#include "aidl_service.h"
 #include "ipc.h"
 #include "rpmb.h"
 #include "session.h"
@@ -125,9 +128,12 @@ struct ipc_channel_context* proxy_connect(struct ipc_port_context* parent_ctx,
     rpmb_key_ptr = &rpmb_key;
 #endif
 
-    rc = block_device_tipc_init(parent_ctx->common.hset, &session->block_device,
-                                chan_handle, &session->key, rpmb_key_ptr,
-                                hwkey_session);
+    struct proxy_connect_context* proxy_ctx =
+            containerof(parent_ctx, struct proxy_connect_context, tipc_ctx);
+
+    rc = block_device_tipc_init(&session->block_device, parent_ctx->common.hset,
+                                &proxy_ctx->aidl_ctx, chan_handle,
+                                &session->key, rpmb_key_ptr, hwkey_session);
     if (rc < 0) {
         SS_ERR("%s: block_device_tipc_init failed (%d)\n", __func__, rc);
         goto err_init_block_device;

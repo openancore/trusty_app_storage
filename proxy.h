@@ -17,8 +17,18 @@
 #include <trusty_ipc.h>
 #include <uapi/trusty_uuid.h>
 
+#include "aidl_service.h"
 #include "ipc.h"
 
+struct proxy_connect_context {
+    struct storage_service_aidl_context aidl_ctx;
+    struct ipc_port_context tipc_ctx;
+};
+
+/*
+ * @parent_ctx must be a pointer to the &tipc_ctx member of a
+ * &struct proxy_connect_context
+ */
 struct ipc_channel_context* proxy_connect(struct ipc_port_context* parent_ctx,
                                           const uuid_t* peer_uuid,
                                           handle_t chan_handle);
