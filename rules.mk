@@ -116,6 +116,15 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/stats
 endif
 
+STORAGE_AIDL_ENABLED ?= false
+ifeq (true,$(call TOBOOL,$(STORAGE_AIDL_ENABLED)))
+MODULE_DEFINES += STORAGE_AIDL_ENABLED=1
+MODULE_SRCS += $(LOCAL_DIR)/aidl_service.cpp
+MODULE_LIBRARY_DEPS += \
+	frameworks/native/libs/binder/trusty \
+	trusty/user/base/interface/secure_storage/cpp
+endif
+
 MODULE_DEPS += \
 	trusty/user/app/storage/test/block_host_test \
 	trusty/user/app/storage/test/storage_host_test \

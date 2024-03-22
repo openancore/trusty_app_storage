@@ -20,6 +20,7 @@
 #include <lib/tipc/tipc.h>
 #include <trusty_ipc.h>
 
+#include "aidl_service.h"
 #include "block_device.h"
 #include "ipc.h"
 #include "tipc_ns.h"
@@ -98,6 +99,7 @@ struct client_port_context {
 struct block_device_tipc {
     handle_t ipc_handle;
     struct rpmb_state* rpmb_state;
+    struct storage_service_aidl_context* aidl_ctx;
 
     struct block_device_rpmb dev_rpmb;
     struct fs tr_state_rpmb;
@@ -124,8 +126,9 @@ struct block_device_tipc {
     struct client_port_context fs_ns;
 };
 
-int block_device_tipc_init(struct tipc_hset* hset,
-                           struct block_device_tipc* state,
+int block_device_tipc_init(struct block_device_tipc* state,
+                           struct tipc_hset* hset,
+                           struct storage_service_aidl_context* aidl_ctx,
                            handle_t ipc_handle,
                            const struct key* fs_key,
                            const struct rpmb_key* rpmb_key,
