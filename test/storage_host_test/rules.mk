@@ -43,6 +43,7 @@ HOST_INCLUDE_DIRS += \
 	$(LOCAL_DIR) \
 	$(STORAGE_DIR) \
 	$(COMMON_DIR) \
+	trusty/kernel/lib/libc-ext/include \
 	trusty/user/base/interface/storage/include \
 
 # block_device_tipc.h requires hwkey and system_state for declarations even

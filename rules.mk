@@ -100,6 +100,7 @@ MODULE_SRCS := \
 	$(LOCAL_DIR)/transaction.c \
 
 MODULE_LIBRARY_DEPS := \
+	trusty/user/base/interface/metrics \
 	trusty/user/base/interface/storage \
 	trusty/user/base/lib/hwkey \
 	trusty/user/base/lib/libc-trusty \
