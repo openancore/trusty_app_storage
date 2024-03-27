@@ -40,7 +40,7 @@ void mock_error_report_clear(void) {
     }
 }
 
-void expect_errors(enum stats_trusty_storage_error_type type, int count) {
+void expect_errors(enum trusty_storage_error_type type, int count) {
     int i;
     struct mock_storage_error_report* err_report;
 
@@ -52,9 +52,9 @@ void expect_errors(enum stats_trusty_storage_error_type type, int count) {
     assert(!mock_error_report_next());
 }
 
-void do_error_report(enum stats_trusty_storage_error_type type,
+void do_error_report(enum trusty_storage_error_type type,
                      const char* fs_name,
-                     enum error_report_block_type block_type) {
+                     enum trusty_block_type block_type) {
     struct mock_storage_error_report* report = malloc(sizeof(*report));
     assert(report);
     report->type = type;

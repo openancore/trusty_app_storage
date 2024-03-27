@@ -29,6 +29,7 @@
 #include "ipc.h"
 #include "proxy.h"
 #include "storage_limits.h"
+#include "error_reporting.h"
 
 #define SS_ERR(args...) fprintf(stderr, "ss: " args)
 
@@ -61,6 +62,12 @@ int main(void) {
         return rc;
     }
 
+    rc = connect_metrics_ta();
+    if(rc != NO_ERROR)
+    {
+        SS_ERR("fatal: unable to connect to metrics TA (%d)\n", rc);
+        return rc;
+    }
     rc = tipc_run_event_loop(hset);
     storage_aidl_delete_service(&ctx.aidl_ctx);
     ipc_port_destroy(&ctx.tipc_ctx);
