@@ -26,7 +26,6 @@
 #include <lk/err_ptr.h>
 #include <trusty_unittest.h>
 
-#include "aidl_service.h"
 #include "block_cache.h"
 #include "block_device_tipc.h"
 #include "crypt.h"
@@ -34,6 +33,7 @@
 #include "file.h"
 #include "rpmb.h"
 #include "storageproxy_shim.h"
+#include "tipc_service.h"
 #include "transaction.h"
 
 /* For BLOCK_CACHE_SIZE */
@@ -41,9 +41,8 @@
 
 static struct key storage_test_key;
 static struct block_device_tipc test_block_device;
+static struct storage_tipc_service test_tipc_service;
 static struct tipc_hset* hset;
-static struct storage_service_aidl_context aidl =
-        STORAGE_SERVICE_AIDL_CONTEXT_INITIAL_VALUE(aidl);
 
 static bool print_test_verbose = false;
 
@@ -506,9 +505,13 @@ TEST_P(StorageTest, FailRpmbVerify) {
      * verify_failed flag from the rpmb state.
      */
     transaction_free(&_state->tr);
-    block_device_tipc_uninit(&test_block_device);
-    rc = block_device_tipc_init(&test_block_device, hset, &aidl, null_handle,
+    storage_tipc_service_destroy(&test_tipc_service, &test_block_device);
+    block_device_tipc_destroy(&test_block_device);
+    rc = block_device_tipc_init(&test_block_device, null_handle,
                                 &storage_test_key, NULL, null_handle);
+    ASSERT_EQ(rc, 0);
+    rc = storage_tipc_service_init(&test_tipc_service, &test_block_device,
+                                   hset);
     ASSERT_EQ(rc, 0);
     transaction_init(&_state->tr, *((struct fs**)GetParam()), true);
 
@@ -647,9 +650,13 @@ TEST_P(StorageTest, DesyncBackingFile) {
     ignore_next_ns_writes(0);
     transaction_free(&_state->tr);
 
-    block_device_tipc_uninit(&test_block_device);
-    rc = block_device_tipc_init(&test_block_device, hset, &aidl, null_handle,
+    storage_tipc_service_destroy(&test_tipc_service, &test_block_device);
+    block_device_tipc_destroy(&test_block_device);
+    rc = block_device_tipc_init(&test_block_device, null_handle,
                                 &storage_test_key, NULL, null_handle);
+    ASSERT_EQ(rc, 0);
+    rc = storage_tipc_service_init(&test_tipc_service, &test_block_device,
+                                   hset);
     ASSERT_EQ(rc, 0);
     transaction_init(&_state->tr, fs, true);
     _state->initial_super_block_version = _state->tr.fs->super_block_version;
@@ -740,9 +747,13 @@ TEST_P(StorageTest, CorruptFileInfo) {
     transaction_free(&_state->tr);
 
     /* remount the filesystem to clear the block cache */
-    block_device_tipc_uninit(&test_block_device);
-    rc = block_device_tipc_init(&test_block_device, hset, &aidl, null_handle,
+    storage_tipc_service_destroy(&test_tipc_service, &test_block_device);
+    block_device_tipc_destroy(&test_block_device);
+    rc = block_device_tipc_init(&test_block_device, null_handle,
                                 &storage_test_key, NULL, null_handle);
+    ASSERT_EQ(rc, 0);
+    rc = storage_tipc_service_init(&test_tipc_service, &test_block_device,
+                                   hset);
     ASSERT_EQ(rc, 0);
     transaction_init(&_state->tr, fs, true);
     _state->initial_super_block_version = _state->tr.fs->super_block_version;
@@ -753,9 +764,13 @@ TEST_P(StorageTest, CorruptFileInfo) {
     ASSERT_EQ(true, fs->needs_full_scan);
     transaction_free(&_state->tr);
 
-    block_device_tipc_uninit(&test_block_device);
-    rc = block_device_tipc_init(&test_block_device, hset, &aidl, null_handle,
+    storage_tipc_service_destroy(&test_tipc_service, &test_block_device);
+    block_device_tipc_destroy(&test_block_device);
+    rc = block_device_tipc_init(&test_block_device, null_handle,
                                 &storage_test_key, NULL, null_handle);
+    ASSERT_EQ(rc, 0);
+    rc = storage_tipc_service_init(&test_tipc_service, &test_block_device,
+                                   hset);
     ASSERT_EQ(rc, 0);
     transaction_init(&_state->tr, fs, true);
     _state->initial_super_block_version = _state->tr.fs->super_block_version;
@@ -823,14 +838,15 @@ int main(int argc, const char* argv[]) {
     if (IS_ERR(hset)) {
         fprintf(stderr, "%s: tipc_hset_create failed (%d)\n", __func__, rc);
     }
-    rc = storage_aidl_create_service(&aidl, hset);
+    rc = block_device_tipc_init(&test_block_device, null_handle,
+                                &storage_test_key, NULL, null_handle);
     if (rc < 0) {
-        fprintf(stderr, "%s: storage_aidl_create_service failed (%d)\n",
-                __func__, rc);
+        fprintf(stderr, "%s: block_device_tipc_init failed (%d)\n", __func__,
+                rc);
         goto err;
     }
-    rc = block_device_tipc_init(&test_block_device, hset, &aidl, null_handle,
-                                &storage_test_key, NULL, null_handle);
+    rc = storage_tipc_service_init(&test_tipc_service, &test_block_device,
+                                   hset);
     if (rc < 0) {
         fprintf(stderr, "%s: block_device_tipc_init failed (%d)\n", __func__,
                 rc);
@@ -839,9 +855,10 @@ int main(int argc, const char* argv[]) {
 
     rc = RUN_ALL_TESTS() ? 0 : 1;
 
-    block_device_tipc_uninit(&test_block_device);
+    storage_tipc_service_destroy(&test_tipc_service, &test_block_device);
+
 init_err:
-    storage_aidl_delete_service(&aidl);
+    block_device_tipc_destroy(&test_block_device);
 err:
     crypt_shutdown();
     destroy_rpmb_state();

@@ -26,7 +26,6 @@
 
 #include "client_session.h"
 #include "file.h"
-#include "session.h"
 #include "storage_limits.h"
 
 // macros to help manage debug output

@@ -16,9 +16,11 @@
 
 #pragma once
 
+#include "aidl_service.h"
 #include "block_device_tipc.h"
 #include "crypt.h"
 #include "ipc.h"
+#include "tipc_service.h"
 
 /* SSSC (Secure Storage Session Context) */
 #define STORAGE_SESSION_MAGIC 0x53535343
@@ -28,12 +30,16 @@
  * @magic:        a sentinel value used for checking for data corruption.
  *                Initialized to STORAGE_SESSION_MAGIC.
  * @block_device: the file system state
+ * @tipc:         service exposing tipc client ports. Owned by the session.
+ * @aidl:         service exposing aidl interface. Not owned by the session.
  * @key:          storage encryption key
  * @proxy_ctx:    the context object on the proxy channel
  */
 struct storage_session {
     uint32_t magic;
     struct block_device_tipc block_device;
+    struct storage_tipc_service tipc;
+    struct storage_service_aidl_context aidl;
     struct key key;
 
     struct ipc_channel_context proxy_ctx;

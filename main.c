@@ -69,7 +69,7 @@ int main(void) {
         return rc;
     }
     rc = tipc_run_event_loop(hset);
-    storage_aidl_delete_service(&ctx.aidl_ctx);
+    storage_aidl_destroy_service(&ctx.aidl_ctx);
     ipc_port_destroy(&ctx.tipc_ctx);
     return rc;
 }

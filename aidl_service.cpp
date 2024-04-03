@@ -48,6 +48,7 @@
 #include <android/hardware/security/see/storage/Integrity.h>
 #include <android/hardware/security/see/storage/OpenOptions.h>
 
+#include "block_device_tipc.h"
 #include "client.h"
 #include "client_session.h"
 #include "file.h"
@@ -133,11 +134,11 @@ static file_create_mode create_mode(CreationMode mode) {
 }
 
 static Status get_fs(const Filesystem& filesystem,
-                     storage_aidl_filesystem* out) {
+                     storage_filesystem_type* out) {
     switch (filesystem.integrity) {
     case Integrity::TAMPER_PROOF_AT_REST: {
         // TP is persistent and available before userdata
-        *out = STORAGE_AIDL_TP;
+        *out = STORAGE_TP;
         break;
     }
     case Integrity::TAMPER_DETECT: {
@@ -148,11 +149,11 @@ static Status get_fs(const Filesystem& filesystem,
                         Status::EX_UNSUPPORTED_OPERATION,
                         "Unsupported Filesystem properties: TDEA does not guarantee persistence");
             }
-            *out = STORAGE_AIDL_TDEA;
+            *out = STORAGE_TDEA;
             break;
         }
         case Availability::AFTER_USERDATA: {
-            *out = filesystem.persistent ? STORAGE_AIDL_TDP : STORAGE_AIDL_TD;
+            *out = filesystem.persistent ? STORAGE_TDP : STORAGE_TD;
             break;
         }
         default:
@@ -173,7 +174,7 @@ static Status get_fs(const Filesystem& filesystem,
 class StorageClientSession {
 public:
     StorageClientSession(struct fs* fs,
-                         storage_aidl_filesystem fs_type,
+                         storage_filesystem_type fs_type,
                          const uuid_t* peer)
             : inner_(), fs_type_(fs_type), active_(false) {
         storage_client_session_init(&inner_, fs, peer);
@@ -182,7 +183,7 @@ public:
     ~StorageClientSession() { Deactivate(); }
 
     storage_client_session* get() { return active_ ? &inner_ : nullptr; }
-    storage_aidl_filesystem fs_type() { return fs_type_; }
+    storage_filesystem_type fs_type() { return fs_type_; }
 
     void Deactivate() {
         active_ = false;
@@ -191,7 +192,7 @@ public:
 
 private:
     storage_client_session inner_;
-    storage_aidl_filesystem fs_type_;
+    storage_filesystem_type fs_type_;
     bool active_;
 };
 
@@ -596,7 +597,7 @@ public:
     Status MakeSession(const Filesystem& filesystem,
                        const uuid_t* peer,
                        std::shared_ptr<StorageClientSession>* out) {
-        storage_aidl_filesystem fs_type;
+        storage_filesystem_type fs_type;
         Status result = get_fs(filesystem, &fs_type);
         if (!result.isOk()) {
             return result;
@@ -617,8 +618,10 @@ public:
         return Status::ok();
     }
 
-    void DeactivateFilesystem(storage_aidl_filesystem fs_type) {
-        if (filesystems_[fs_type] == nullptr) {
+    void DeactivateFilesystem(struct block_device_tipc* block_devices,
+                              storage_filesystem_type fs_type) {
+        if (filesystems_[fs_type] == nullptr &&
+            block_device_tipc_fs_connected(block_devices, fs_type)) {
             SS_ERR("Deactivating fs that's already inactive: %d", fs_type);
             return;
         }
@@ -639,13 +642,19 @@ public:
         }
     }
 
-    void ActivateFilesystem(struct fs* fs, storage_aidl_filesystem fs_type) {
+    void TryActivateFilesystem(struct block_device_tipc* block_devices,
+                               storage_filesystem_type fs_type) {
         if (filesystems_[fs_type] != nullptr) {
             SS_ERR("Reactivating fs that's already active: %d", fs_type);
-            DeactivateFilesystem(fs_type);
+            DeactivateFilesystem(block_devices, fs_type);
         }
 
-        filesystems_[fs_type] = fs;
+        if (!block_device_tipc_fs_connected(block_devices, fs_type)) {
+            return;
+        }
+
+        filesystems_[fs_type] =
+                block_device_tipc_get_fs(block_devices, fs_type);
 
         std::erase_if(sessions_,
                       [](const std::weak_ptr<StorageClientSession>& session) {
@@ -654,7 +663,7 @@ public:
     }
 
 private:
-    std::array<struct fs*, STORAGE_AIDL_FILESYSTEMS_COUNT> filesystems_;
+    std::array<struct fs*, STORAGE_FILESYSTEMS_COUNT> filesystems_;
     std::vector<std::weak_ptr<StorageClientSession>> sessions_;
 };
 
@@ -725,18 +734,26 @@ int storage_aidl_create_service(struct storage_service_aidl_context* ctx,
     return EXIT_SUCCESS;
 }
 
-void storage_aidl_delete_service(struct storage_service_aidl_context* ctx) {
+void storage_aidl_destroy_service(struct storage_service_aidl_context* ctx) {
     delete ctx->inner;
-    ctx->inner = nullptr;
 }
 
-void storage_aidl_enable_filesystem(struct storage_service_aidl_context* ctx,
-                                    struct fs* fs,
-                                    enum storage_aidl_filesystem fs_type) {
-    ctx->inner->service.ActivateFilesystem(fs, fs_type);
+void storage_aidl_enable(struct storage_service_aidl_context* self,
+                         struct block_device_tipc* block_devices) {
+    storage_service::StorageService& service = self->inner->service;
+    service.TryActivateFilesystem(block_devices, STORAGE_TP);
+    service.TryActivateFilesystem(block_devices, STORAGE_TDEA);
+    service.TryActivateFilesystem(block_devices, STORAGE_TDP);
+    service.TryActivateFilesystem(block_devices, STORAGE_TD);
+    service.TryActivateFilesystem(block_devices, STORAGE_NSP);
 }
 
-void storage_aidl_disable_filesystem(struct storage_service_aidl_context* ctx,
-                                     enum storage_aidl_filesystem fs_type) {
-    ctx->inner->service.DeactivateFilesystem(fs_type);
+void storage_aidl_disable(struct storage_service_aidl_context* self,
+                          struct block_device_tipc* block_devices) {
+    storage_service::StorageService& service = self->inner->service;
+    service.DeactivateFilesystem(block_devices, STORAGE_NSP);
+    service.DeactivateFilesystem(block_devices, STORAGE_TD);
+    service.DeactivateFilesystem(block_devices, STORAGE_TDP);
+    service.DeactivateFilesystem(block_devices, STORAGE_TDEA);
+    service.DeactivateFilesystem(block_devices, STORAGE_TP);
 }

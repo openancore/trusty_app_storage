@@ -23,6 +23,7 @@ HOST_SRCS := \
 	$(STORAGE_DIR)/block_allocator.c \
 	$(STORAGE_DIR)/block_cache.c \
 	$(STORAGE_DIR)/block_device_tipc.c \
+	$(STORAGE_DIR)/tipc_service.c \
 	$(STORAGE_DIR)/block_mac.c \
 	$(STORAGE_DIR)/block_map.c \
 	$(STORAGE_DIR)/block_set.c \
