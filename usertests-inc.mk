@@ -16,3 +16,9 @@
 TRUSTY_USER_TESTS += \
 	trusty/user/app/storage/test/storage-unittest \
 	trusty/user/app/storage/test/storage-benchmark
+
+ifeq (true,$(call TOBOOL,$(STORAGE_AIDL_ENABLED)))
+TRUSTY_RUST_USER_TESTS += \
+	trusty/user/app/storage/test/storage-unittest-aidl \
+
+endif
