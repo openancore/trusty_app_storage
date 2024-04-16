@@ -5,7 +5,7 @@ mod unittests;
 
 #[cfg(test)]
 mod tests {
-    use crate::unittests;
+    use crate::define_tests_for;
     use android_hardware_security_see_storage::aidl::android::hardware::security::see::storage::{
         FileAvailability::FileAvailability, FileIntegrity::FileIntegrity,
         FileProperties::FileProperties, ISecureStorage::ISecureStorage,
@@ -37,33 +37,65 @@ mod tests {
         assert_ok!(secure_storage.as_binder().ping_binder());
     }
 
-    mod tp {
-        use super::*;
-        const TP: &'static FileProperties = &FileProperties {
-            integrity: FileIntegrity::TAMPER_PROOF_AT_REST,
-            availability: FileAvailability::AFTER_USERDATA,
-            persistent: false,
-        };
+    const TP: &'static FileProperties = &FileProperties {
+        integrity: FileIntegrity::TAMPER_PROOF_AT_REST,
+        availability: FileAvailability::AFTER_USERDATA,
+        persistent: false,
+    };
+    const TDEA: &'static FileProperties = &FileProperties {
+        integrity: FileIntegrity::TAMPER_DETECT,
+        availability: FileAvailability::BEFORE_USERDATA,
+        persistent: false,
+    };
+    #[cfg(feature = "has_ns")]
+    const TDP: &'static FileProperties = &FileProperties {
+        integrity: FileIntegrity::TAMPER_DETECT,
+        availability: FileAvailability::AFTER_USERDATA,
+        persistent: true,
+    };
+    #[cfg(feature = "has_ns")]
+    const TD: &'static FileProperties = &FileProperties {
+        integrity: FileIntegrity::TAMPER_DETECT,
+        availability: FileAvailability::AFTER_USERDATA,
+        persistent: false,
+    };
 
-        #[test]
-        fn create_delete() {
-            let ss = assert_ok!(start_session(TP));
-            unittests::create_delete(&*ss);
-        }
-        #[test]
-        fn create_move_delete() {
-            let ss = assert_ok!(start_session(TP));
-            unittests::create_move_delete(&*ss);
-        }
-        #[test]
-        fn file_list() {
-            let ss = assert_ok!(start_session(TP));
-            unittests::file_list(&*ss);
-        }
-        #[test]
-        fn write_read_sequential() {
-            let ss = assert_ok!(start_session(TP));
-            unittests::write_read_sequential(&*ss);
-        }
+    define_tests_for!(tp, TP);
+    define_tests_for!(tdea, TDEA);
+    #[cfg(feature = "has_ns")]
+    define_tests_for!(tdp, TDP);
+    #[cfg(feature = "has_ns")]
+    define_tests_for!(td, TD);
+
+    #[macro_export]
+    macro_rules! define_tests_for {
+        ($mod_name:ident, $file_properties:ident) => {
+            mod $mod_name {
+                use super::$file_properties;
+                use test::assert_ok;
+                use $crate::{tests::start_session, unittests};
+
+                #[test]
+                fn create_delete() {
+                    let ss = assert_ok!(start_session($file_properties));
+                    unittests::create_delete(&*ss);
+                }
+                #[test]
+                fn create_move_delete() {
+                    let ss = assert_ok!(start_session($file_properties));
+                    unittests::create_move_delete(&*ss);
+                }
+                #[test]
+                fn file_list() {
+                    let ss = assert_ok!(start_session($file_properties));
+                    unittests::file_list(&*ss);
+                }
+                #[test]
+                fn write_read_sequential() {
+                    let ss = assert_ok!(start_session($file_properties));
+                    unittests::write_read_sequential(&*ss);
+                }
+            }
+        };
     }
 }

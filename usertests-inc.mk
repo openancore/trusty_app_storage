@@ -20,5 +20,6 @@ TRUSTY_USER_TESTS += \
 ifeq (true,$(call TOBOOL,$(STORAGE_AIDL_ENABLED)))
 TRUSTY_RUST_USER_TESTS += \
 	trusty/user/app/storage/test/storage-unittest-aidl \
+	trusty/user/app/storage/test/storage-unittest-aidl/ns \
 
 endif

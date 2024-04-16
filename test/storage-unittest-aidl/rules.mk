@@ -18,22 +18,8 @@ MODULE := $(LOCAL_DIR)
 
 MANIFEST := $(LOCAL_DIR)/manifest.json
 
-MODULE_SRCS += \
-	$(LOCAL_DIR)/lib.rs \
-
 MODULE_CRATE_NAME := storage_unittest_aidl
 
-MODULE_LIBRARY_DEPS += \
-	$(call FIND_CRATE,libc) \
-	$(call FIND_CRATE,log) \
-	frameworks/native/libs/binder/trusty/rust \
-	frameworks/native/libs/binder/trusty/rust/binder_rpc_server \
-	frameworks/native/libs/binder/trusty/rust/rpcbinder \
-	trusty/user/base/interface/secure_storage/rust \
-	trusty/user/base/lib/trusty-std \
-	trusty/user/base/lib/trusty-log \
-	trusty/user/base/lib/tipc/rust \
+SRC_DIR := $(LOCAL_DIR)/
 
-MODULE_RUST_TESTS := true
-
-include make/library.mk
+include trusty/user/app/storage/test/storage-unittest-aidl/aidl-test-inc.mk
