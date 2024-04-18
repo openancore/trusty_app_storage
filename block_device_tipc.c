@@ -106,6 +106,19 @@ struct rpmb_key_derivation_out {
     uint8_t unused[sizeof(struct key)];
 };
 
+struct rpmb_span {
+    uint16_t start;
+    uint16_t block_count;
+};
+
+struct rpmb_spans {
+    struct rpmb_span key;
+    struct rpmb_span ns;
+    struct rpmb_span tdp;
+    /* Start of the rest of the RPMB, which is used for TP and TDEA */
+    uint16_t rpmb_start;
+};
+
 static int rpmb_check(struct rpmb_state* rpmb_state, uint16_t block) {
     int ret;
     uint8_t tmp[RPMB_BUF_SIZE];
@@ -471,31 +484,48 @@ static bool block_device_tipc_has_ns(struct block_device_tipc* self) {
     return self->dev_ns.dev.block_count;
 }
 
+/**
+ * rpmb_span_end() - Calculates the first block past the end of @self.
+ */
+static uint16_t rpmb_span_end(struct rpmb_span self) {
+    return self.start + self.block_count;
+}
+
+/**
+ * calculate_rpmb_spans() - Determines the starts and sizes of RPMB partitions.
+ */
+static void calculate_rpmb_spans(struct rpmb_spans* out) {
+    out->key.block_count = 1;
+    /* Used to store superblocks */
+    out->ns.block_count = 2;
+#if HAS_FS_TDP
+    out->tdp.block_count = out->ns.block_count;
+#else
+    out->tdp.block_count = 0;
+#endif
+
+    out->key.start = 0;
+    out->ns.start = rpmb_span_end(out->key);
+    out->tdp.start = rpmb_span_end(out->ns);
+    out->rpmb_start = rpmb_span_end(out->tdp);
+}
+
 int block_device_tipc_init(struct block_device_tipc* state,
                            handle_t ipc_handle,
                            const struct key* fs_key,
                            const struct rpmb_key* rpmb_key,
                            hwkey_session_t hwkey_session) {
-    int ret;
-    bool alternate_data_partition = false;
-    uint32_t ns_init_flags = FS_INIT_FLAGS_NONE;
-#if HAS_FS_TDP
-    uint32_t tdp_init_flags = FS_INIT_FLAGS_NONE;
-#endif
-    uint8_t probe;
-    uint16_t rpmb_key_part_base = 0;
     uint32_t rpmb_block_count;
-    uint32_t rpmb_part_sb_ns_block_count = 2;
-    /*
-     * First block is reserved for rpmb key derivation data, whose base is
-     * rpmb_key_part_base
-     */
-    uint16_t rpmb_part1_base = 1;
-    uint16_t rpmb_part2_base = rpmb_part1_base + rpmb_part_sb_ns_block_count;
+    bool alternate_data_partition = false;
+    uint8_t probe;
+    uint32_t ns_init_flags = FS_INIT_FLAGS_NONE;
+
+    int ret;
+    struct rpmb_spans partitions;
+    calculate_rpmb_spans(&partitions);
 
 #if HAS_FS_TDP
-    uint16_t rpmb_part_sb_tdp_base = rpmb_part2_base;
-    rpmb_part2_base += rpmb_part_sb_ns_block_count;
+    uint32_t tdp_init_flags = FS_INIT_FLAGS_NONE;
 #endif
     state->ipc_handle = ipc_handle;
 
@@ -507,7 +537,7 @@ int block_device_tipc_init(struct block_device_tipc* state,
     }
 
     ret = block_device_tipc_init_rpmb_key(state->rpmb_state, rpmb_key,
-                                          rpmb_key_part_base, hwkey_session);
+                                          partitions.key.start, hwkey_session);
     if (ret < 0) {
         SS_ERR("%s: block_device_tipc_init_rpmb_key failed (%d)\n", __func__,
                ret);
@@ -528,15 +558,15 @@ int block_device_tipc_init(struct block_device_tipc* state,
                                             0); /* TODO: get hint from ns */
         rpmb_block_count /= BLOCK_SIZE_RPMB_BLOCKS;
     }
-    if (rpmb_block_count < rpmb_part2_base) {
+    if (rpmb_block_count < partitions.rpmb_start) {
         ret = -1;
         SS_ERR("%s: bad rpmb size, %d\n", __func__, rpmb_block_count);
         goto err_bad_rpmb_size;
     }
 
-    block_device_tipc_init_dev_rpmb(&state->dev_rpmb, state->rpmb_state,
-                                    rpmb_part2_base,
-                                    rpmb_block_count - rpmb_part2_base, false);
+    block_device_tipc_init_dev_rpmb(
+            &state->dev_rpmb, state->rpmb_state, partitions.rpmb_start,
+            rpmb_block_count - partitions.rpmb_start, false);
 
     /* TODO: allow non-rpmb based tamper proof storage */
     ret = fs_init(&state->tr_state_rpmb, file_system_id_tp, fs_key,
@@ -589,8 +619,8 @@ int block_device_tipc_init(struct block_device_tipc* state,
     }
 
     block_device_tipc_init_dev_rpmb(&state->dev_ns_tdp_rpmb, state->rpmb_state,
-                                    rpmb_part_sb_tdp_base,
-                                    rpmb_part_sb_ns_block_count, false);
+                                    partitions.tdp.start,
+                                    partitions.tdp.block_count, false);
 
 #if STORAGE_TDP_AUTO_CHECKPOINT_ENABLED
     if (!system_state_provisioning_allowed()) {
@@ -634,8 +664,8 @@ int block_device_tipc_init(struct block_device_tipc* state,
     }
 
     block_device_tipc_init_dev_rpmb(&state->dev_ns_rpmb, state->rpmb_state,
-                                    rpmb_part1_base,
-                                    rpmb_part_sb_ns_block_count, true);
+                                    partitions.ns.start,
+                                    partitions.ns.block_count, true);
 
 #if STORAGE_NS_RECOVERY_CLEAR_ALLOWED
     ns_init_flags |= FS_INIT_FLAGS_RECOVERY_CLEAR_ALLOWED;
