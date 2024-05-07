@@ -50,6 +50,7 @@
     # in testrunner is insufficient.
     needs(
         [
+            porttest("com.android.trusty.rust.storage_unittest_aidl_ns.test", timeout=(60 * 30)),
             porttest("com.android.storage-unittest.nsp", timeout=(60 * 30)),
             porttest("com.android.storage-unittest.td"),
             porttest("com.android.storage-unittest.tdp", timeout=(60 * 30)),
