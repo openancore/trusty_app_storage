@@ -164,8 +164,9 @@ int block_device_tipc_init(struct block_device_tipc* self,
 /**
  * block_device_tipc_destroy() - Destroy a block device context
  * @self: The &struct block_device_tipc to destroy. Does not free the
- * context's memory. Any &struct fs gotten from &self via a call to
- * block_device_tipc_get_fs() must no longer be in use.
+ * context's memory. Any &struct fs &self returned from calls to
+ * block_device_tipc_get_fs() must no longer be in use. @self must have
+ * already been disconnected with &block_device_tipc_disconnect().
  */
 void block_device_tipc_destroy(struct block_device_tipc* self);
 
@@ -188,5 +189,31 @@ bool block_device_tipc_fs_connected(struct block_device_tipc* self,
  */
 struct fs* block_device_tipc_get_fs(struct block_device_tipc* self,
                                     enum storage_filesystem_type fs_type);
+
+/**
+ * block_device_tipc_disconnect() - Disconnect from the block devices
+ *
+ * Severs ipc connections to the block devices/filesystems backing the &struct
+ * fs objects returned by &block_device_tipc_get_fs(). These fs objects state
+ * will be maintained, but they must not be used until
+ * &block_device_tipc_reconnect() is called.
+ *
+ * @self: The &struct block_device_tipc to disconnect.
+ */
+void block_device_tipc_disconnect(struct block_device_tipc* self);
+
+/**
+ * block_device_tipc_reconnect() - Reconnect to the block devices
+ *
+ * Reestablishes ipc connections to the block devices/filesystems backing the
+ * &struct fs objects returned by &block_device_tipc_get_fs().
+ *
+ * @self: The &struct block_device_tipc to reconnect.
+ * @ipc_handle: IPC handle to use to talk to backing block devices/filesystems.
+ * @fs_key: Key used to decrypt filesystems.
+ */
+int block_device_tipc_reconnect(struct block_device_tipc* self,
+                                handle_t ipc_handle,
+                                const struct key* fs_key);
 
 __END_CDECLS

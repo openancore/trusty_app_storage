@@ -26,10 +26,10 @@
 #include <lib/hwkey/hwkey.h>
 
 #include "aidl_service.h"
+#include "block_device.h"
 #include "block_device_tipc.h"
 #include "ipc.h"
 #include "rpmb.h"
-#include "session.h"
 #include "tipc_service.h"
 
 #define SS_ERR(args...) fprintf(stderr, "ss: " args)
@@ -88,19 +88,10 @@ static int get_rpmb_auth_key(hwkey_session_t session,
 }
 #endif
 
-struct ipc_channel_context* proxy_connect(struct ipc_port_context* parent_ctx,
-                                          const uuid_t* peer_uuid,
-                                          handle_t chan_handle) {
-    struct rpmb_key* rpmb_key_ptr = NULL;
+static int storage_service_init(struct storage_service* self,
+                                struct tipc_hset* hset,
+                                handle_t chan_handle) {
     int rc;
-
-    struct storage_session* session = calloc(1, sizeof(*session));
-    if (session == NULL) {
-        SS_ERR("%s: out of memory\n", __func__);
-        goto err_alloc_session;
-    }
-
-    session->magic = STORAGE_SESSION_MAGIC;
 
     rc = hwkey_open();
     if (rc < 0) {
@@ -111,13 +102,14 @@ struct ipc_channel_context* proxy_connect(struct ipc_port_context* parent_ctx,
     hwkey_session_t hwkey_session = (hwkey_session_t)rc;
 
     /* Generate encryption key */
-    rc = get_storage_encryption_key(hwkey_session, session->key.byte,
-                                    sizeof(session->key));
+    rc = get_storage_encryption_key(hwkey_session, self->key.byte,
+                                    sizeof(self->key));
     if (rc < 0) {
         SS_ERR("%s: can't get storage key: (%d) \n", __func__, rc);
         goto err_get_storage_key;
     }
 
+    struct rpmb_key* rpmb_key_ptr = NULL;
     /* Init RPMB key */
 #if !WITH_HKDF_RPMB_KEY
     struct rpmb_key rpmb_key;
@@ -130,34 +122,25 @@ struct ipc_channel_context* proxy_connect(struct ipc_port_context* parent_ctx,
     rpmb_key_ptr = &rpmb_key;
 #endif
 
-    struct proxy_connect_context* proxy_ctx =
-            containerof(parent_ctx, struct proxy_connect_context, tipc_ctx);
-    session->aidl = proxy_ctx->aidl_ctx;
-
-    rc = block_device_tipc_init(&session->block_device, chan_handle,
-                                &session->key, rpmb_key_ptr, hwkey_session);
+    rc = block_device_tipc_init(&self->block_device, chan_handle, &self->key,
+                                rpmb_key_ptr, hwkey_session);
     if (rc < 0) {
         SS_ERR("%s: block_device_tipc_init failed (%d)\n", __func__, rc);
         goto err_init_block_device;
     }
 
-    rc = storage_tipc_service_init(&session->tipc, &session->block_device,
-                                   parent_ctx->common.hset);
+    rc = storage_aidl_create_service(&self->aidl, hset);
     if (rc < 0) {
-        SS_ERR("%s: storage_tipc_service_init failed (%d)\n", __func__, rc);
-        goto err_init_storage_tipc_service;
+        SS_ERR("%s: storage_aidl_create_service failed (%d)\n", __func__, rc);
+        goto err_aidl_create_service;
     }
 
-    storage_aidl_enable(&session->aidl, &session->block_device);
-
-    session->proxy_ctx.ops.on_disconnect = proxy_disconnect;
+    storage_aidl_enable(&self->aidl, &self->block_device);
 
     hwkey_close(hwkey_session);
+    return NO_ERROR;
 
-    return &session->proxy_ctx;
-
-err_init_storage_tipc_service:
-    block_device_tipc_destroy(&session->block_device);
+err_aidl_create_service:
 err_init_block_device:
 #if !WITH_HKDF_RPMB_KEY
 err_get_rpmb_key:
@@ -165,17 +148,123 @@ err_get_rpmb_key:
 err_get_storage_key:
     hwkey_close(hwkey_session);
 err_hwkey_open:
+    free(self);
+err_alloc_service:
+    return rc;
+}
+
+static void storage_service_disconnect(struct storage_service* self) {
+    storage_aidl_disable(&self->aidl, &self->block_device);
+    block_device_tipc_disconnect(&self->block_device);
+    block_device_tipc_destroy(&self->block_device);
+}
+
+static int storage_service_reconnect(struct storage_service* self,
+                                     handle_t chan_handle) {
+    int rc = hwkey_open();
+    if (rc < 0) {
+        SS_ERR("%s: hwkey init failed: %d\n", __func__, rc);
+        goto err_hwkey_open;
+    }
+
+    hwkey_session_t hwkey_session = (hwkey_session_t)rc;
+
+    struct rpmb_key* rpmb_key_ptr = NULL;
+    /* Init RPMB key */
+#if !WITH_HKDF_RPMB_KEY
+    struct rpmb_key rpmb_key;
+    rc = get_rpmb_auth_key(hwkey_session, rpmb_key.byte, sizeof(rpmb_key.byte));
+    if (rc < 0) {
+        SS_ERR("%s: can't get storage auth key: (%d)\n", __func__, rc);
+        goto err_get_rpmb_key;
+    }
+
+    rpmb_key_ptr = &rpmb_key;
+#endif
+
+    rc = block_device_tipc_init(&self->block_device, chan_handle, &self->key,
+                                rpmb_key_ptr, hwkey_session);
+    if (rc < 0) {
+        SS_ERR("%s: block_device_tipc_init failed (%d)\n", __func__, rc);
+        goto err_init_block_device;
+    }
+
+    storage_aidl_enable(&self->aidl, &self->block_device);
+    return NO_ERROR;
+
+err_init_block_device:
+#if !WITH_HKDF_RPMB_KEY
+err_get_rpmb_key:
+#endif
+    hwkey_close(hwkey_session);
+err_hwkey_open:
+    return rc;
+}
+
+static void storage_service_destroy(struct storage_service* self) {
+    storage_aidl_destroy_service(&self->aidl);
+}
+
+struct ipc_channel_context* proxy_connect(struct ipc_port_context* parent_ctx,
+                                          const uuid_t* peer_uuid,
+                                          handle_t chan_handle) {
+    struct proxy_connect_context* self =
+            containerof(parent_ctx, struct proxy_connect_context, tipc_ctx);
+    struct tipc_hset* hset = parent_ctx->common.hset;
+    int rc;
+
+    if (!self->service.initialized) {
+        rc = storage_service_init(&self->service, hset, chan_handle);
+        if (rc < 0) {
+            goto err_service_init;
+        }
+    } else {
+        rc = storage_service_reconnect(&self->service, chan_handle);
+        if (rc < 0) {
+            goto err_service_reconnect;
+        }
+    }
+
+    struct storage_session* session = calloc(1, sizeof(*session));
+    if (session == NULL) {
+        SS_ERR("%s: out of memory\n", __func__);
+        goto err_alloc_session;
+    }
+
+    session->magic = STORAGE_SESSION_MAGIC;
+    session->service = &self->service;
+
+    rc = storage_tipc_service_init(&session->tipc,
+                                   &session->service->block_device, hset);
+    if (rc < 0) {
+        SS_ERR("%s: block_device_tipc_init failed (%d)\n", __func__, rc);
+        goto err_init_block_device_tipc;
+    }
+
+    session->proxy_ctx.ops.on_disconnect = proxy_disconnect;
+    return &session->proxy_ctx;
+
+err_init_block_device_tipc:
     free(session);
 err_alloc_session:
+    storage_service_disconnect(&self->service);
+err_service_reconnect:
+    storage_service_destroy(&self->service);
+err_service_init:
     return NULL;
 }
 
 void proxy_disconnect(struct ipc_channel_context* ctx) {
     struct storage_session* session = proxy_context_to_session(ctx);
+    struct storage_service* service = session->service;
 
-    storage_aidl_disable(&session->aidl, &session->block_device);
-    storage_tipc_service_destroy(&session->tipc, &session->block_device);
-    block_device_tipc_destroy(&session->block_device);
-
+    storage_tipc_service_destroy(&session->tipc, &service->block_device);
     free(session);
+
+    storage_service_disconnect(service);
+}
+
+void proxy_destroy(struct proxy_connect_context* self) {
+    storage_service_destroy(&self->service);
+    ipc_port_destroy(&self->tipc_ctx);
 }
