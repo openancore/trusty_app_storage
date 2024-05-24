@@ -15,6 +15,7 @@
 
 TRUSTY_USER_TESTS += \
 	trusty/user/app/storage/test/storage-unittest \
+	trusty/user/app/storage/test/storage-reconnect-test \
 
 ifneq (true,$(call TOBOOL,$(UNITTEST_COVERAGE_ENABLED)))
 TRUSTY_USER_TESTS += \
