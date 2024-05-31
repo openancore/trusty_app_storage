@@ -27,9 +27,9 @@ enum {
     TRACE_LEVEL_READ,
 };
 
-#define TRACEFF(f, str, x...)                                          \
-    do {                                                               \
-        fprintf(f, "%s:%d: " str, __PRETTY_FUNCTION__, __LINE__, ##x); \
+#define TRACEFF(f, str, x...)                                 \
+    do {                                                      \
+        fprintf(f, "%s():%d: " str, __func__, __LINE__, ##x); \
     } while (0)
 #undef LTRACEF_LEVEL
 #define LTRACEF_LEVEL(level, x...)                                    \
