@@ -9,9 +9,8 @@ mod unittests;
 mod tests {
     use crate::define_tests_for;
     use android_hardware_security_see_storage::aidl::android::hardware::security::see::storage::{
-        FileAvailability::FileAvailability, FileIntegrity::FileIntegrity,
-        FileProperties::FileProperties, ISecureStorage::ISecureStorage,
-        IStorageSession::IStorageSession,
+        Availability::Availability, Filesystem::Filesystem, ISecureStorage::ISecureStorage,
+        IStorageSession::IStorageSession, Integrity::Integrity,
     };
     use binder::{Status, StatusCode, Strong};
     use core::ffi::CStr;
@@ -27,7 +26,7 @@ mod tests {
         RpcSession::new().setup_trusty_client(STORAGE_AIDL_PORT_NAME)
     }
 
-    fn start_session(properties: &FileProperties) -> Result<Strong<dyn IStorageSession>, Status> {
+    fn start_session(properties: &Filesystem) -> Result<Strong<dyn IStorageSession>, Status> {
         connect()?.startSession(properties)
     }
 
@@ -39,26 +38,26 @@ mod tests {
         assert_ok!(secure_storage.as_binder().ping_binder());
     }
 
-    const TP: &'static FileProperties = &FileProperties {
-        integrity: FileIntegrity::TAMPER_PROOF_AT_REST,
-        availability: FileAvailability::AFTER_USERDATA,
+    const TP: &'static Filesystem = &Filesystem {
+        integrity: Integrity::TAMPER_PROOF_AT_REST,
+        availability: Availability::AFTER_USERDATA,
         persistent: false,
     };
-    const TDEA: &'static FileProperties = &FileProperties {
-        integrity: FileIntegrity::TAMPER_DETECT,
-        availability: FileAvailability::BEFORE_USERDATA,
+    const TDEA: &'static Filesystem = &Filesystem {
+        integrity: Integrity::TAMPER_DETECT,
+        availability: Availability::BEFORE_USERDATA,
         persistent: false,
     };
     #[cfg(feature = "has_ns")]
-    const TDP: &'static FileProperties = &FileProperties {
-        integrity: FileIntegrity::TAMPER_DETECT,
-        availability: FileAvailability::AFTER_USERDATA,
+    const TDP: &'static Filesystem = &Filesystem {
+        integrity: Integrity::TAMPER_DETECT,
+        availability: Availability::AFTER_USERDATA,
         persistent: true,
     };
     #[cfg(feature = "has_ns")]
-    const TD: &'static FileProperties = &FileProperties {
-        integrity: FileIntegrity::TAMPER_DETECT,
-        availability: FileAvailability::AFTER_USERDATA,
+    const TD: &'static Filesystem = &Filesystem {
+        integrity: Integrity::TAMPER_DETECT,
+        availability: Availability::AFTER_USERDATA,
         persistent: false,
     };
 
