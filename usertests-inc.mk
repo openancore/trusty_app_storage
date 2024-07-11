@@ -15,7 +15,11 @@
 
 TRUSTY_USER_TESTS += \
 	trusty/user/app/storage/test/storage-unittest \
+
+ifneq (true,$(call TOBOOL,$(UNITTEST_COVERAGE_ENABLED)))
+TRUSTY_USER_TESTS += \
 	trusty/user/app/storage/test/storage-benchmark
+endif
 
 ifeq (true,$(call TOBOOL,$(STORAGE_AIDL_ENABLED)))
 TRUSTY_RUST_USER_TESTS += \
