@@ -1,6 +1,5 @@
 use android_hardware_security_see_storage::aidl::android::hardware::security::see::storage::{
-    DeleteOptions::DeleteOptions, IFile::IFile, ISecureStorage as SecureStorage,
-    IStorageSession::IStorageSession, ReadIntegrity::ReadIntegrity,
+    IFile::IFile, ISecureStorage as SecureStorage, IStorageSession::IStorageSession,
 };
 use binder::ExceptionCode;
 
@@ -15,13 +14,8 @@ pub(crate) fn ensure_deleted(
     fname: &str,
     expectation: Exists,
 ) -> Result<(), String> {
-    const DEFAULT_DELETE: &'static DeleteOptions = &DeleteOptions {
-        readIntegrity: ReadIntegrity::NO_TAMPER,
-        allowWritesDuringAbUpdate: false,
-    };
-
     // Try to delete file
-    let rc = ss.deleteFile(fname, DEFAULT_DELETE);
+    let rc = ss.deleteFile(fname);
     match rc {
         Ok(()) => {
             if let Exists::MustNot = expectation {
