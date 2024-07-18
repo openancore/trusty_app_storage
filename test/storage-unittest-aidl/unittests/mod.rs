@@ -1,6 +1,6 @@
 use android_hardware_security_see_storage::aidl::android::hardware::security::see::storage::{
     CreationMode::CreationMode, FileMode::FileMode, ISecureStorage as SecureStorage,
-    IStorageSession::IStorageSession, OpenOptions::OpenOptions, ReadIntegrity::ReadIntegrity,
+    IStorageSession::IStorageSession, OpenOptions::OpenOptions,
 };
 use binder::ExceptionCode;
 use test::{assert_ok, expect, fail};
@@ -11,17 +11,13 @@ use helpers::{ensure_deleted, Exists};
 const CREATE_EXCLUSIVE: &'static OpenOptions = &OpenOptions {
     createMode: CreationMode::CREATE_EXCLUSIVE,
     accessMode: FileMode::READ_WRITE,
-    readIntegrity: ReadIntegrity::NO_TAMPER,
     truncateOnOpen: true,
-    allowWritesDuringAbUpdate: false,
 };
 
 const NO_CREATE: &'static OpenOptions = &OpenOptions {
     createMode: CreationMode::NO_CREATE,
     accessMode: FileMode::READ_WRITE,
-    readIntegrity: ReadIntegrity::NO_TAMPER,
     truncateOnOpen: false,
-    allowWritesDuringAbUpdate: false,
 };
 
 pub(crate) fn create_delete(ss: &(impl IStorageSession + ?Sized)) {
@@ -131,7 +127,7 @@ pub(crate) fn file_list(ss: &(impl IStorageSession + ?Sized)) {
     }
 
     {
-        let dir = assert_ok!(ss.openDir("", ReadIntegrity::NO_TAMPER));
+        let dir = assert_ok!(ss.openDir(""));
         let filenames = assert_ok!(dir.readNextFilenames(0));
         expect!(filenames.is_empty(), "Found unexpected files: {:?}", filenames);
     }
@@ -148,7 +144,7 @@ pub(crate) fn file_list(ss: &(impl IStorageSession + ?Sized)) {
 
     let mut read_file_names = HashSet::new();
     {
-        let dir = assert_ok!(ss.openDir("", ReadIntegrity::NO_TAMPER));
+        let dir = assert_ok!(ss.openDir(""));
         let mut filenames = assert_ok!(dir.readNextFilenames(0));
         while !filenames.is_empty() {
             for filename in filenames {
