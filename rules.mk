@@ -123,7 +123,9 @@ MODULE_DEFINES += STORAGE_AIDL_ENABLED=1
 MODULE_SRCS += $(LOCAL_DIR)/aidl_service.cpp
 MODULE_LIBRARY_DEPS += \
 	frameworks/native/libs/binder/trusty \
-	trusty/user/base/interface/secure_storage/cpp
+	trusty/user/base/interface/secure_storage/cpp \
+	trusty/user/base/lib/libstdc++-trusty \
+
 endif
 
 MODULE_DEPS += \
