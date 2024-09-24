@@ -71,6 +71,7 @@ HOST_LIBS := \
 	m
 
 HOST_DEPS := \
-	trusty/user/base/host/boringssl
+	trusty/user/base/host/boringssl \
+	trusty/user/base/host/unittest \
 
 include make/host_test.mk

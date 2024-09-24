@@ -28,5 +28,8 @@ HOST_FLAGS := \
 	-Wno-deprecated-declarations \
 	-DSTORAGE_FAKE \
 
+HOST_DEPS := \
+	trusty/user/base/host/unittest \
+
 include trusty/user/app/storage/storage_mock/add_mock_storage.mk
 include trusty/kernel/make/host_test.mk
