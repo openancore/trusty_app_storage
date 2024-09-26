@@ -544,6 +544,7 @@ int block_device_tipc_init(struct block_device_tipc* state,
                   &state->dev_rpmb.dev, &state->dev_rpmb.dev,
                   FS_INIT_FLAGS_NONE);
     if (ret < 0) {
+        SS_ERR("%s: failed to initialize TP: %d\n", __func__, ret);
         goto err_init_tr_state_rpmb;
     }
 
@@ -630,6 +631,7 @@ int block_device_tipc_init(struct block_device_tipc* state,
                   &state->dev_ns_tdp.dev, &state->dev_ns_tdp_rpmb.dev,
                   tdp_init_flags);
     if (ret < 0) {
+        SS_ERR("%s: failed to initialize TDP: %d\n", __func__, ret);
         goto err_init_fs_ns_tdp_tr_state;
     }
 
@@ -695,6 +697,7 @@ int block_device_tipc_init(struct block_device_tipc* state,
     ret = fs_init(&state->tr_state_ns, file_system_id_td, fs_key,
                   &state->dev_ns.dev, &state->dev_ns_rpmb.dev, ns_init_flags);
     if (ret < 0) {
+        SS_ERR("%s: failed to initialize TD: %d\n", __func__, ret);
         goto err_init_fs_ns_tr_state;
     }
 
@@ -729,6 +732,7 @@ int block_device_tipc_init(struct block_device_tipc* state,
                   FS_INIT_FLAGS_RECOVERY_CLEAR_ALLOWED |
                           FS_INIT_FLAGS_ALLOW_TAMPERING);
     if (ret < 0) {
+        SS_ERR("%s: failed to initialize NSP: %d\n", __func__, ret);
         goto err_init_fs_ns_nsp_tr_state;
     }
 
@@ -746,6 +750,7 @@ int block_device_tipc_init(struct block_device_tipc* state,
                       &state->dev_ns_nsp.dev, &state->dev_ns_nsp.dev,
                       FS_INIT_FLAGS_DO_CLEAR | FS_INIT_FLAGS_ALLOW_TAMPERING);
         if (ret < 0) {
+            SS_ERR("%s: failed to initialize NSP: %d\n", __func__, ret);
             goto err_init_fs_ns_nsp_tr_state;
         }
     }
