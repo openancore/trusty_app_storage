@@ -106,23 +106,22 @@ struct rpmb_key_derivation_out {
     uint8_t unused[sizeof(struct key)];
 };
 
-static int rpmb_check(struct block_device_tipc* state, uint16_t block) {
+static int rpmb_check(struct rpmb_state* rpmb_state, uint16_t block) {
     int ret;
     uint8_t tmp[RPMB_BUF_SIZE];
-    ret = rpmb_read(state->rpmb_state, tmp, block, 1);
+    ret = rpmb_read(rpmb_state, tmp, block, 1);
     SS_DBG_IO("%s: check rpmb_block %d, ret %d\n", __func__, block, ret);
     return ret;
 }
 
-static uint32_t rpmb_search_size(struct block_device_tipc* state,
-                                 uint16_t hint) {
+static uint32_t rpmb_search_size(struct rpmb_state* rpmb_state, uint16_t hint) {
     int ret;
     uint32_t low = 0;
     uint16_t high = UINT16_MAX;
     uint16_t curr = hint ? hint - 1 : UINT16_MAX;
 
     while (low <= high) {
-        ret = rpmb_check(state, curr);
+        ret = rpmb_check(rpmb_state, curr);
         switch (ret) {
         case 0:
             low = curr + 1;
@@ -519,15 +518,16 @@ int block_device_tipc_init(struct block_device_tipc* state,
 
     if (BLOCK_COUNT_RPMB) {
         rpmb_block_count = BLOCK_COUNT_RPMB;
-        ret = rpmb_check(state, rpmb_block_count * BLOCK_SIZE_RPMB_BLOCKS - 1);
+        ret = rpmb_check(state->rpmb_state,
+                         rpmb_block_count * BLOCK_SIZE_RPMB_BLOCKS - 1);
         if (ret) {
             SS_ERR("%s: bad static rpmb size, %d\n", __func__,
                    rpmb_block_count);
             goto err_bad_rpmb_size;
         }
     } else {
-        rpmb_block_count =
-                rpmb_search_size(state, 0); /* TODO: get hint from ns */
+        rpmb_block_count = rpmb_search_size(state->rpmb_state,
+                                            0); /* TODO: get hint from ns */
         rpmb_block_count /= BLOCK_SIZE_RPMB_BLOCKS;
     }
     if (rpmb_block_count < rpmb_part2_base) {
