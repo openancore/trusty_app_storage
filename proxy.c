@@ -26,9 +26,11 @@
 #include <lib/hwkey/hwkey.h>
 
 #include "aidl_service.h"
+#include "block_device_tipc.h"
 #include "ipc.h"
 #include "rpmb.h"
 #include "session.h"
+#include "tipc_service.h"
 
 #define SS_ERR(args...) fprintf(stderr, "ss: " args)
 
@@ -130,14 +132,23 @@ struct ipc_channel_context* proxy_connect(struct ipc_port_context* parent_ctx,
 
     struct proxy_connect_context* proxy_ctx =
             containerof(parent_ctx, struct proxy_connect_context, tipc_ctx);
+    session->aidl = proxy_ctx->aidl_ctx;
 
-    rc = block_device_tipc_init(&session->block_device, parent_ctx->common.hset,
-                                &proxy_ctx->aidl_ctx, chan_handle,
+    rc = block_device_tipc_init(&session->block_device, chan_handle,
                                 &session->key, rpmb_key_ptr, hwkey_session);
     if (rc < 0) {
         SS_ERR("%s: block_device_tipc_init failed (%d)\n", __func__, rc);
         goto err_init_block_device;
     }
+
+    rc = storage_tipc_service_init(&session->tipc, &session->block_device,
+                                   parent_ctx->common.hset);
+    if (rc < 0) {
+        SS_ERR("%s: storage_tipc_service_init failed (%d)\n", __func__, rc);
+        goto err_init_storage_tipc_service;
+    }
+
+    storage_aidl_enable(&session->aidl, &session->block_device);
 
     session->proxy_ctx.ops.on_disconnect = proxy_disconnect;
 
@@ -145,6 +156,8 @@ struct ipc_channel_context* proxy_connect(struct ipc_port_context* parent_ctx,
 
     return &session->proxy_ctx;
 
+err_init_storage_tipc_service:
+    block_device_tipc_destroy(&session->block_device);
 err_init_block_device:
 #if !WITH_HKDF_RPMB_KEY
 err_get_rpmb_key:
@@ -160,7 +173,9 @@ err_alloc_session:
 void proxy_disconnect(struct ipc_channel_context* ctx) {
     struct storage_session* session = proxy_context_to_session(ctx);
 
-    block_device_tipc_uninit(&session->block_device);
+    storage_aidl_disable(&session->aidl, &session->block_device);
+    storage_tipc_service_destroy(&session->tipc, &session->block_device);
+    block_device_tipc_destroy(&session->block_device);
 
     free(session);
 }

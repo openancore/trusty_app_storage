@@ -24,9 +24,9 @@
 #include <trusty/uuid.h>
 #include <trusty_log.h>
 
-#include <storage_consts.h>
 #include <interface/metrics/metrics.h>
-#include "block_device_tipc.h"
+#include <storage_consts.h>
+#include "tipc_service.h"
 
 #define TLOG_TAG "ss-err_rep"
 

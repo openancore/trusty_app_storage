@@ -30,13 +30,12 @@
 #include <openssl/mem.h>
 #include <uapi/err.h>
 
-#include "block_device_tipc.h"
 #include "client.h"
 #include "client_session.h"
 #include "client_session_tipc.h"
 #include "ipc.h"
-#include "session.h"
 #include "storage_limits.h"
+#include "tipc_service.h"
 
 /* macros to help manage debug output */
 #define SS_ERR(args...) fprintf(stderr, "ss: " args)
