@@ -32,7 +32,6 @@
 #include <openssl/mem.h>
 #include <openssl/rand.h>
 
-#include "aidl_service.h"
 #include "block_cache.h"
 #include "client_tipc.h"
 #include "fs.h"
@@ -160,7 +159,7 @@ static void block_device_tipc_rpmb_start_read(struct block_device* dev,
     assert(block < dev->block_count);
     rpmb_block = block + dev_rpmb->base;
 
-    ret = rpmb_read(dev_rpmb->state->rpmb_state, tmp,
+    ret = rpmb_read(dev_rpmb->rpmb_state, tmp,
                     rpmb_block * BLOCK_SIZE_RPMB_BLOCKS,
                     BLOCK_SIZE_RPMB_BLOCKS);
 
@@ -201,7 +200,7 @@ static void block_device_tipc_rpmb_start_write(struct block_device* dev,
 
     rpmb_block = block + dev_rpmb->base;
 
-    ret = rpmb_write(dev_rpmb->state->rpmb_state, data,
+    ret = rpmb_write(dev_rpmb->rpmb_state, data,
                      rpmb_block * BLOCK_SIZE_RPMB_BLOCKS,
                      BLOCK_SIZE_RPMB_BLOCKS, true, dev_rpmb->is_userdata);
 
@@ -227,7 +226,7 @@ static void block_device_tipc_ns_start_read(struct block_device* dev,
     uint8_t tmp[BLOCK_SIZE_MAIN]; /* TODO: pass data in? */
     struct block_device_ns* dev_ns = to_block_device_ns(dev);
 
-    ret = ns_read_pos(dev_ns->state->ipc_handle, dev_ns->ns_handle,
+    ret = ns_read_pos(dev_ns->ipc_handle, dev_ns->ns_handle,
                       block * BLOCK_SIZE_MAIN, tmp, BLOCK_SIZE_MAIN);
     SS_DBG_IO("%s: block %" PRIu64 ", ret %d\n", __func__, block, ret);
     if (ret == 0) {
@@ -251,7 +250,7 @@ static void block_device_tipc_ns_start_write(struct block_device* dev,
 
     assert(data_size == BLOCK_SIZE_MAIN);
 
-    ret = ns_write_pos(dev_ns->state->ipc_handle, dev_ns->ns_handle,
+    ret = ns_write_pos(dev_ns->ipc_handle, dev_ns->ns_handle,
                        block * BLOCK_SIZE_MAIN, data, data_size,
                        dev_ns->is_userdata, sync);
     SS_DBG_IO("%s: block %" PRIu64 ", ret %d\n", __func__, block, ret);
@@ -268,7 +267,7 @@ static void block_device_tipc_ns_wait_for_io(struct block_device* dev) {
 }
 
 static void block_device_tipc_init_dev_rpmb(struct block_device_rpmb* dev_rpmb,
-                                            struct block_device_tipc* state,
+                                            struct rpmb_state* rpmb_state,
                                             uint16_t base,
                                             uint32_t block_count,
                                             bool is_userdata) {
@@ -281,13 +280,13 @@ static void block_device_tipc_init_dev_rpmb(struct block_device_rpmb* dev_rpmb,
     dev_rpmb->dev.mac_size = 2;
     dev_rpmb->dev.tamper_detecting = true;
     list_initialize(&dev_rpmb->dev.io_ops);
-    dev_rpmb->state = state;
+    dev_rpmb->rpmb_state = rpmb_state;
     dev_rpmb->base = base;
     dev_rpmb->is_userdata = is_userdata;
 }
 
 static void block_device_tipc_init_dev_ns(struct block_device_ns* dev_ns,
-                                          struct block_device_tipc* state,
+                                          handle_t ipc_handle,
                                           bool is_userdata) {
     dev_ns->dev.start_read = block_device_tipc_ns_start_read;
     dev_ns->dev.start_write = block_device_tipc_ns_start_write;
@@ -297,7 +296,7 @@ static void block_device_tipc_init_dev_ns(struct block_device_ns* dev_ns,
     dev_ns->dev.mac_size = sizeof(struct mac);
     dev_ns->dev.tamper_detecting = false;
     list_initialize(&dev_ns->dev.io_ops);
-    dev_ns->state = state;
+    dev_ns->ipc_handle = ipc_handle;
     dev_ns->ns_handle = 0; /* Filled in later */
     dev_ns->is_userdata = is_userdata;
 }
@@ -470,9 +469,11 @@ static int check_storage_size(handle_t handle,
     return ret;
 }
 
+static bool block_device_tipc_has_ns(struct block_device_tipc* self) {
+    return self->dev_ns.dev.block_count;
+}
+
 int block_device_tipc_init(struct block_device_tipc* state,
-                           struct tipc_hset* hset,
-                           struct storage_service_aidl_context* aidl_ctx,
                            handle_t ipc_handle,
                            const struct key* fs_key,
                            const struct rpmb_key* rpmb_key,
@@ -500,7 +501,6 @@ int block_device_tipc_init(struct block_device_tipc* state,
     rpmb_part2_base += rpmb_part_sb_ns_block_count;
 #endif
     state->ipc_handle = ipc_handle;
-    state->aidl_ctx = aidl_ctx;
 
     /* init rpmb */
     ret = rpmb_init(&state->rpmb_state, &state->ipc_handle);
@@ -536,7 +536,8 @@ int block_device_tipc_init(struct block_device_tipc* state,
         goto err_bad_rpmb_size;
     }
 
-    block_device_tipc_init_dev_rpmb(&state->dev_rpmb, state, rpmb_part2_base,
+    block_device_tipc_init_dev_rpmb(&state->dev_rpmb, state->rpmb_state,
+                                    rpmb_part2_base,
                                     rpmb_block_count - rpmb_part2_base, false);
 
     /* TODO: allow non-rpmb based tamper proof storage */
@@ -548,27 +549,7 @@ int block_device_tipc_init(struct block_device_tipc* state,
         goto err_init_tr_state_rpmb;
     }
 
-    state->fs_rpmb.tr_state = &state->tr_state_rpmb;
-
-    storage_aidl_enable_filesystem(aidl_ctx, state->fs_rpmb.tr_state,
-                                   STORAGE_AIDL_TP);
-    ret = client_create_port(hset, &state->fs_rpmb.client_ctx,
-                             STORAGE_CLIENT_TP_PORT);
-    if (ret < 0) {
-        goto err_fs_rpmb_create_port;
-    }
-
-    state->fs_rpmb_boot.tr_state = &state->tr_state_rpmb;
-
-    storage_aidl_enable_filesystem(aidl_ctx, state->fs_rpmb_boot.tr_state,
-                                   STORAGE_AIDL_TDEA);
-    ret = client_create_port(hset, &state->fs_rpmb_boot.client_ctx,
-                             STORAGE_CLIENT_TDEA_PORT);
-    if (ret < 0) {
-        goto err_fs_rpmb_boot_create_port;
-    }
-
-    block_device_tipc_init_dev_ns(&state->dev_ns, state, true);
+    block_device_tipc_init_dev_ns(&state->dev_ns, state->ipc_handle, true);
 
     ret = ns_open_file(state->ipc_handle, "0", &state->dev_ns.ns_handle, true);
     if (ret < 0) {
@@ -596,7 +577,7 @@ int block_device_tipc_init(struct block_device_tipc* state,
     state->dev_ns.dev.block_count = sz / state->dev_ns.dev.block_size;
 
 #if HAS_FS_TDP
-    block_device_tipc_init_dev_ns(&state->dev_ns_tdp, state, false);
+    block_device_tipc_init_dev_ns(&state->dev_ns_tdp, state->ipc_handle, false);
 
     ret = ns_open_file(state->ipc_handle, "persist/0",
                        &state->dev_ns_tdp.ns_handle, true);
@@ -611,9 +592,7 @@ int block_device_tipc_init(struct block_device_tipc* state,
     }
     state->dev_ns_tdp.dev.block_count = sz / state->dev_ns_tdp.dev.block_size;
 
-    state->fs_tdp.tr_state = &state->tr_state_ns_tdp;
-
-    block_device_tipc_init_dev_rpmb(&state->dev_ns_tdp_rpmb, state,
+    block_device_tipc_init_dev_rpmb(&state->dev_ns_tdp_rpmb, state->rpmb_state,
                                     rpmb_part_sb_tdp_base,
                                     rpmb_part_sb_ns_block_count, false);
 
@@ -649,26 +628,7 @@ int block_device_tipc_init(struct block_device_tipc* state,
         }
     }
 #endif
-
-#else
-    /*
-     * Create STORAGE_CLIENT_TDP_PORT alias after we know the backing file for
-     * STORAGE_CLIENT_TD_PORT is available. On future devices, using HAS_FS_TDP,
-     * STORAGE_CLIENT_TDP_PORT will not be available when the bootloader is
-     * running, so we limit access to this alias as well to prevent apps
-     * developed on old devices from relying on STORAGE_CLIENT_TDP_PORT being
-     * available early.
-     */
-    state->fs_tdp.tr_state = &state->tr_state_rpmb;
 #endif
-
-    storage_aidl_enable_filesystem(aidl_ctx, state->fs_tdp.tr_state,
-                                   STORAGE_AIDL_TDP);
-    ret = client_create_port(hset, &state->fs_tdp.client_ctx,
-                             STORAGE_CLIENT_TDP_PORT);
-    if (ret < 0) {
-        goto err_fs_rpmb_tdp_create_port;
-    }
 
     /* Request empty file system if file is empty */
     ret = ns_read_pos(state->ipc_handle, state->dev_ns.ns_handle, 0, &probe,
@@ -677,9 +637,8 @@ int block_device_tipc_init(struct block_device_tipc* state,
         ns_init_flags |= FS_INIT_FLAGS_DO_CLEAR;
     }
 
-    state->fs_ns.tr_state = &state->tr_state_ns;
-
-    block_device_tipc_init_dev_rpmb(&state->dev_ns_rpmb, state, rpmb_part1_base,
+    block_device_tipc_init_dev_rpmb(&state->dev_ns_rpmb, state->rpmb_state,
+                                    rpmb_part1_base,
                                     rpmb_part_sb_ns_block_count, true);
 
 #if STORAGE_NS_RECOVERY_CLEAR_ALLOWED
@@ -701,16 +660,8 @@ int block_device_tipc_init(struct block_device_tipc* state,
         goto err_init_fs_ns_tr_state;
     }
 
-    storage_aidl_enable_filesystem(aidl_ctx, state->fs_ns.tr_state,
-                                   STORAGE_AIDL_TD);
-    ret = client_create_port(hset, &state->fs_ns.client_ctx,
-                             STORAGE_CLIENT_TD_PORT);
-    if (ret < 0) {
-        goto err_fs_ns_create_port;
-    }
-
 #if HAS_FS_NSP
-    block_device_tipc_init_dev_ns(&state->dev_ns_nsp, state, false);
+    block_device_tipc_init_dev_ns(&state->dev_ns_nsp, state->ipc_handle, false);
 
     ret = ns_open_file(state->ipc_handle, "persist/nsp",
                        &state->dev_ns_nsp.ns_handle, true);
@@ -724,8 +675,6 @@ int block_device_tipc_init(struct block_device_tipc* state,
         goto err_get_nsp_max_size;
     }
     state->dev_ns_nsp.dev.block_count = sz / state->dev_ns_nsp.dev.block_size;
-
-    state->fs_nsp.tr_state = &state->tr_state_ns_nsp;
 
     ret = fs_init(&state->tr_state_ns_nsp, file_system_id_nsp, fs_key,
                   &state->dev_ns_nsp.dev, &state->dev_ns_nsp.dev,
@@ -754,42 +703,20 @@ int block_device_tipc_init(struct block_device_tipc* state,
             goto err_init_fs_ns_nsp_tr_state;
         }
     }
-
-#else
-    /*
-     * Create STORAGE_CLIENT_NSP_PORT alias to TDP if we don't support NSP on
-     * this build. TDP has stronger security properties than NSP, and NSP may be
-     * reset at any point, so this should be acceptable for clients.
-     */
-    state->fs_nsp.tr_state = state->fs_tdp.tr_state;
 #endif
-
-    storage_aidl_enable_filesystem(aidl_ctx, state->fs_nsp.tr_state,
-                                   STORAGE_AIDL_NSP);
-    ret = client_create_port(hset, &state->fs_nsp.client_ctx,
-                             STORAGE_CLIENT_NSP_PORT);
-    if (ret < 0) {
-        goto err_fs_nsp_create_port;
-    }
 
     return 0;
 
-err_fs_nsp_create_port:
 #if HAS_FS_NSP
-    fs_destroy(&state->tr_state_ns_nsp);
 err_init_fs_ns_nsp_tr_state:
     block_cache_dev_destroy(&state->dev_ns_nsp.dev);
 err_get_nsp_max_size:
     ns_close_file(state->ipc_handle, state->dev_ns_nsp.ns_handle);
 err_open_nsp:
 #endif
-    ipc_port_destroy(&state->fs_ns.client_ctx);
-err_fs_ns_create_port:
     fs_destroy(&state->tr_state_ns);
 err_init_fs_ns_tr_state:
     block_cache_dev_destroy(&state->dev_ns.dev);
-    ipc_port_destroy(&state->fs_tdp.client_ctx);
-err_fs_rpmb_tdp_create_port:
 #if HAS_FS_TDP
     fs_destroy(&state->tr_state_ns_tdp);
 err_init_fs_ns_tdp_tr_state:
@@ -800,10 +727,6 @@ err_open_tdp:
 #endif
 err_get_td_max_size:
     ns_close_file(state->ipc_handle, state->dev_ns.ns_handle);
-    ipc_port_destroy(&state->fs_rpmb_boot.client_ctx);
-err_fs_rpmb_boot_create_port:
-    ipc_port_destroy(&state->fs_rpmb.client_ctx);
-err_fs_rpmb_create_port:
     fs_destroy(&state->tr_state_rpmb);
 err_init_tr_state_rpmb:
     block_cache_dev_destroy(&state->dev_rpmb.dev);
@@ -814,35 +737,86 @@ err_rpmb_init:
     return ret;
 }
 
-void block_device_tipc_uninit(struct block_device_tipc* state) {
-    if (state->dev_ns.dev.block_count) {
-        storage_aidl_disable_filesystem(state->aidl_ctx, STORAGE_AIDL_TD);
-        ipc_port_destroy(&state->fs_ns.client_ctx);
+void block_device_tipc_destroy(struct block_device_tipc* state) {
+    if (block_device_tipc_has_ns(state)) {
         fs_destroy(&state->tr_state_ns);
         block_cache_dev_destroy(&state->dev_ns.dev);
         ns_close_file(state->ipc_handle, state->dev_ns.ns_handle);
-
-        storage_aidl_disable_filesystem(state->aidl_ctx, STORAGE_AIDL_TDP);
-        ipc_port_destroy(&state->fs_tdp.client_ctx);
 #if HAS_FS_TDP
         fs_destroy(&state->tr_state_ns_tdp);
         block_cache_dev_destroy(&state->dev_ns_tdp.dev);
         ns_close_file(state->ipc_handle, state->dev_ns_tdp.ns_handle);
 #endif
-
-        storage_aidl_disable_filesystem(state->aidl_ctx, STORAGE_AIDL_NSP);
-        ipc_port_destroy(&state->fs_nsp.client_ctx);
 #if HAS_FS_NSP
         fs_destroy(&state->tr_state_ns_nsp);
         block_cache_dev_destroy(&state->dev_ns_nsp.dev);
         ns_close_file(state->ipc_handle, state->dev_ns_nsp.ns_handle);
 #endif
     }
-    storage_aidl_disable_filesystem(state->aidl_ctx, STORAGE_AIDL_TDEA);
-    ipc_port_destroy(&state->fs_rpmb_boot.client_ctx);
-    storage_aidl_disable_filesystem(state->aidl_ctx, STORAGE_AIDL_TP);
-    ipc_port_destroy(&state->fs_rpmb.client_ctx);
+
     fs_destroy(&state->tr_state_rpmb);
     block_cache_dev_destroy(&state->dev_rpmb.dev);
     rpmb_uninit(state->rpmb_state);
+}
+
+bool block_device_tipc_fs_connected(struct block_device_tipc* self,
+                                    enum storage_filesystem_type fs_type) {
+    switch (fs_type) {
+    case STORAGE_TP:
+        return self->ipc_handle != 0;
+    case STORAGE_TDEA:
+        return self->ipc_handle != 0;
+    case STORAGE_TDP:
+#if HAS_FS_TDP
+        return block_device_tipc_has_ns(self) &&
+               self->dev_ns_tdp.ipc_handle != 0;
+#else
+        return block_device_tipc_fs_connected(self, STORAGE_TP);
+#endif
+    case STORAGE_TD:
+        return block_device_tipc_has_ns(self) && self->dev_ns.ipc_handle != 0;
+    case STORAGE_NSP:
+#if HAS_FS_NSP
+        return block_device_tipc_has_ns(self) &&
+               self->dev_ns_nsp.ipc_handle != 0;
+#else
+        return block_device_tipc_fs_connected(self, STORAGE_TDP);
+#endif
+    case STORAGE_FILESYSTEMS_COUNT:
+    default:
+        SS_ERR("%s: Tried to check fs of unrecognized storage_filesystem type: (%d)\n",
+               __func__, fs_type);
+        return false;
+    }
+}
+
+struct fs* block_device_tipc_get_fs(struct block_device_tipc* self,
+                                    enum storage_filesystem_type fs_type) {
+    assert(block_device_tipc_fs_connected(self, fs_type));
+
+    switch (fs_type) {
+    case STORAGE_TP:
+        return &self->tr_state_rpmb;
+    case STORAGE_TDEA:
+        return &self->tr_state_rpmb;
+    case STORAGE_TDP:
+#if HAS_FS_TDP
+        return &self->tr_state_ns_tdp;
+#else
+        return block_device_tipc_get_fs(self, STORAGE_TP);
+#endif
+    case STORAGE_TD:
+        return &self->tr_state_ns;
+    case STORAGE_NSP:
+#if HAS_FS_NSP
+        return &self->tr_state_ns_nsp;
+#else
+        return block_device_tipc_get_fs(self, STORAGE_TDP);
+#endif
+    case STORAGE_FILESYSTEMS_COUNT:
+    default:
+        SS_ERR("%s: Tried to init fs of unrecognized storage_filesystem type: (%d)\n",
+               __func__, fs_type);
+        return NULL;
+    }
 }

@@ -30,9 +30,9 @@
 #include <uapi/err.h>
 #include <unistd.h>
 
-#include "block_device_tipc.h"
 #include "rpmb.h"
 #include "rpmb_dev/rpmb_dev.h"
+#include "tipc_service.h"
 
 #define TLOG_TAG "ss-test"
 
