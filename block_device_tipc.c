@@ -485,6 +485,67 @@ static bool block_device_tipc_has_ns(struct block_device_tipc* self) {
 }
 
 /**
+ * init_rpmb_fs() - Initialize @self's RPMB fs and its backing block devices.
+ * @self:            The struct block_device_tipc to modify
+ * @fs_key:          The key to use for the filesystem.
+ * @partition_start: The first RPMB block in the partition to use for this fs.
+ *
+ * Return: NO_ERROR on success, error code less than 0 on error.
+ */
+static int init_rpmb_fs(struct block_device_tipc* self,
+                        const struct key* fs_key,
+                        uint16_t partition_start) {
+    int ret;
+    uint32_t rpmb_block_count;
+
+    if (BLOCK_COUNT_RPMB) {
+        rpmb_block_count = BLOCK_COUNT_RPMB;
+        ret = rpmb_check(self->rpmb_state,
+                         rpmb_block_count * BLOCK_SIZE_RPMB_BLOCKS - 1);
+        if (ret < 0) {
+            SS_ERR("%s: bad static rpmb size, %d\n", __func__,
+                   rpmb_block_count);
+            goto err_bad_rpmb_size;
+        }
+    } else {
+        rpmb_block_count = rpmb_search_size(self->rpmb_state,
+                                            0); /* TODO: get hint from ns */
+        rpmb_block_count /= BLOCK_SIZE_RPMB_BLOCKS;
+    }
+    if (rpmb_block_count < partition_start) {
+        ret = -1;
+        SS_ERR("%s: bad rpmb size, %d\n", __func__, rpmb_block_count);
+        goto err_bad_rpmb_size;
+    }
+
+    block_device_tipc_init_dev_rpmb(&self->dev_rpmb, self->rpmb_state,
+                                    partition_start,
+                                    rpmb_block_count - partition_start, false);
+
+    /* TODO: allow non-rpmb based tamper proof storage */
+    ret = fs_init(&self->tr_state_rpmb, file_system_id_tp, fs_key,
+                  &self->dev_rpmb.dev, &self->dev_rpmb.dev, FS_INIT_FLAGS_NONE);
+    if (ret < 0) {
+        SS_ERR("%s: failed to initialize TP: %d\n", __func__, ret);
+        goto err_init_tr_state_rpmb;
+    }
+    return 0;
+
+err_init_tr_state_rpmb:
+    block_cache_dev_destroy(&self->dev_rpmb.dev);
+err_bad_rpmb_size:
+    return ret;
+}
+
+/**
+ * destroy_rpmb_fs() - Destroy @self's RPMB fs and its backing block devices.
+ */
+static void destroy_rpmb_fs(struct block_device_tipc* self) {
+    fs_destroy(&self->tr_state_rpmb);
+    block_cache_dev_destroy(&self->dev_rpmb.dev);
+}
+
+/**
  * rpmb_span_end() - Calculates the first block past the end of @self.
  */
 static uint16_t rpmb_span_end(struct rpmb_span self) {
@@ -515,7 +576,6 @@ int block_device_tipc_init(struct block_device_tipc* state,
                            const struct key* fs_key,
                            const struct rpmb_key* rpmb_key,
                            hwkey_session_t hwkey_session) {
-    uint32_t rpmb_block_count;
     bool alternate_data_partition = false;
     uint8_t probe;
     uint32_t ns_init_flags = FS_INIT_FLAGS_NONE;
@@ -544,37 +604,9 @@ int block_device_tipc_init(struct block_device_tipc* state,
         goto err_init_rpmb_key;
     }
 
-    if (BLOCK_COUNT_RPMB) {
-        rpmb_block_count = BLOCK_COUNT_RPMB;
-        ret = rpmb_check(state->rpmb_state,
-                         rpmb_block_count * BLOCK_SIZE_RPMB_BLOCKS - 1);
-        if (ret) {
-            SS_ERR("%s: bad static rpmb size, %d\n", __func__,
-                   rpmb_block_count);
-            goto err_bad_rpmb_size;
-        }
-    } else {
-        rpmb_block_count = rpmb_search_size(state->rpmb_state,
-                                            0); /* TODO: get hint from ns */
-        rpmb_block_count /= BLOCK_SIZE_RPMB_BLOCKS;
-    }
-    if (rpmb_block_count < partitions.rpmb_start) {
-        ret = -1;
-        SS_ERR("%s: bad rpmb size, %d\n", __func__, rpmb_block_count);
-        goto err_bad_rpmb_size;
-    }
-
-    block_device_tipc_init_dev_rpmb(
-            &state->dev_rpmb, state->rpmb_state, partitions.rpmb_start,
-            rpmb_block_count - partitions.rpmb_start, false);
-
-    /* TODO: allow non-rpmb based tamper proof storage */
-    ret = fs_init(&state->tr_state_rpmb, file_system_id_tp, fs_key,
-                  &state->dev_rpmb.dev, &state->dev_rpmb.dev,
-                  FS_INIT_FLAGS_NONE);
+    ret = init_rpmb_fs(state, fs_key, partitions.rpmb_start);
     if (ret < 0) {
-        SS_ERR("%s: failed to initialize TP: %d\n", __func__, ret);
-        goto err_init_tr_state_rpmb;
+        goto err_init_rpmb_fs;
     }
 
     block_device_tipc_init_dev_ns(&state->dev_ns, state->ipc_handle, true);
@@ -752,10 +784,8 @@ err_init_fs_ns_tr_state:
     block_cache_dev_destroy(&state->dev_ns.dev);
 err_get_td_max_size:
     ns_close_file(state->ipc_handle, state->dev_ns.ns_handle);
-    fs_destroy(&state->tr_state_rpmb);
-err_init_tr_state_rpmb:
-    block_cache_dev_destroy(&state->dev_rpmb.dev);
-err_bad_rpmb_size:
+    destroy_rpmb_fs(state);
+err_init_rpmb_fs:
 err_init_rpmb_key:
     rpmb_uninit(state->rpmb_state);
 err_rpmb_init:
@@ -779,8 +809,7 @@ void block_device_tipc_destroy(struct block_device_tipc* state) {
         ns_close_file(state->ipc_handle, state->dev_ns.ns_handle);
     }
 
-    fs_destroy(&state->tr_state_rpmb);
-    block_cache_dev_destroy(&state->dev_rpmb.dev);
+    destroy_rpmb_fs(state);
     rpmb_uninit(state->rpmb_state);
 }
 
