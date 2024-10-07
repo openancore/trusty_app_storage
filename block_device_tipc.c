@@ -106,6 +106,19 @@ struct rpmb_key_derivation_out {
     uint8_t unused[sizeof(struct key)];
 };
 
+struct rpmb_span {
+    uint16_t start;
+    uint16_t block_count;
+};
+
+struct rpmb_spans {
+    struct rpmb_span key;
+    struct rpmb_span ns;
+    struct rpmb_span tdp;
+    /* Start of the rest of the RPMB, which is used for TP and TDEA */
+    uint16_t rpmb_start;
+};
+
 static int rpmb_check(struct rpmb_state* rpmb_state, uint16_t block) {
     int ret;
     uint8_t tmp[RPMB_BUF_SIZE];
@@ -471,31 +484,108 @@ static bool block_device_tipc_has_ns(struct block_device_tipc* self) {
     return self->dev_ns.dev.block_count;
 }
 
+/**
+ * init_rpmb_fs() - Initialize @self's RPMB fs and its backing block devices.
+ * @self:            The struct block_device_tipc to modify
+ * @fs_key:          The key to use for the filesystem.
+ * @partition_start: The first RPMB block in the partition to use for this fs.
+ *
+ * Return: NO_ERROR on success, error code less than 0 on error.
+ */
+static int init_rpmb_fs(struct block_device_tipc* self,
+                        const struct key* fs_key,
+                        uint16_t partition_start) {
+    int ret;
+    uint32_t rpmb_block_count;
+
+    if (BLOCK_COUNT_RPMB) {
+        rpmb_block_count = BLOCK_COUNT_RPMB;
+        ret = rpmb_check(self->rpmb_state,
+                         rpmb_block_count * BLOCK_SIZE_RPMB_BLOCKS - 1);
+        if (ret < 0) {
+            SS_ERR("%s: bad static rpmb size, %d\n", __func__,
+                   rpmb_block_count);
+            goto err_bad_rpmb_size;
+        }
+    } else {
+        rpmb_block_count = rpmb_search_size(self->rpmb_state,
+                                            0); /* TODO: get hint from ns */
+        rpmb_block_count /= BLOCK_SIZE_RPMB_BLOCKS;
+    }
+    if (rpmb_block_count < partition_start) {
+        ret = -1;
+        SS_ERR("%s: bad rpmb size, %d\n", __func__, rpmb_block_count);
+        goto err_bad_rpmb_size;
+    }
+
+    block_device_tipc_init_dev_rpmb(&self->dev_rpmb, self->rpmb_state,
+                                    partition_start,
+                                    rpmb_block_count - partition_start, false);
+
+    /* TODO: allow non-rpmb based tamper proof storage */
+    ret = fs_init(&self->tr_state_rpmb, file_system_id_tp, fs_key,
+                  &self->dev_rpmb.dev, &self->dev_rpmb.dev, FS_INIT_FLAGS_NONE);
+    if (ret < 0) {
+        SS_ERR("%s: failed to initialize TP: %d\n", __func__, ret);
+        goto err_init_tr_state_rpmb;
+    }
+    return 0;
+
+err_init_tr_state_rpmb:
+    block_cache_dev_destroy(&self->dev_rpmb.dev);
+err_bad_rpmb_size:
+    return ret;
+}
+
+/**
+ * destroy_rpmb_fs() - Destroy @self's RPMB fs and its backing block devices.
+ */
+static void destroy_rpmb_fs(struct block_device_tipc* self) {
+    fs_destroy(&self->tr_state_rpmb);
+    block_cache_dev_destroy(&self->dev_rpmb.dev);
+}
+
+/**
+ * rpmb_span_end() - Calculates the first block past the end of @self.
+ */
+static uint16_t rpmb_span_end(struct rpmb_span self) {
+    return self.start + self.block_count;
+}
+
+/**
+ * calculate_rpmb_spans() - Determines the starts and sizes of RPMB partitions.
+ */
+static void calculate_rpmb_spans(struct rpmb_spans* out) {
+    out->key.block_count = 1;
+    /* Used to store superblocks */
+    out->ns.block_count = 2;
+#if HAS_FS_TDP
+    out->tdp.block_count = out->ns.block_count;
+#else
+    out->tdp.block_count = 0;
+#endif
+
+    out->key.start = 0;
+    out->ns.start = rpmb_span_end(out->key);
+    out->tdp.start = rpmb_span_end(out->ns);
+    out->rpmb_start = rpmb_span_end(out->tdp);
+}
+
 int block_device_tipc_init(struct block_device_tipc* state,
                            handle_t ipc_handle,
                            const struct key* fs_key,
                            const struct rpmb_key* rpmb_key,
                            hwkey_session_t hwkey_session) {
-    int ret;
     bool alternate_data_partition = false;
-    uint32_t ns_init_flags = FS_INIT_FLAGS_NONE;
-#if HAS_FS_TDP
-    uint32_t tdp_init_flags = FS_INIT_FLAGS_NONE;
-#endif
     uint8_t probe;
-    uint16_t rpmb_key_part_base = 0;
-    uint32_t rpmb_block_count;
-    uint32_t rpmb_part_sb_ns_block_count = 2;
-    /*
-     * First block is reserved for rpmb key derivation data, whose base is
-     * rpmb_key_part_base
-     */
-    uint16_t rpmb_part1_base = 1;
-    uint16_t rpmb_part2_base = rpmb_part1_base + rpmb_part_sb_ns_block_count;
+    uint32_t ns_init_flags = FS_INIT_FLAGS_NONE;
+
+    int ret;
+    struct rpmb_spans partitions;
+    calculate_rpmb_spans(&partitions);
 
 #if HAS_FS_TDP
-    uint16_t rpmb_part_sb_tdp_base = rpmb_part2_base;
-    rpmb_part2_base += rpmb_part_sb_ns_block_count;
+    uint32_t tdp_init_flags = FS_INIT_FLAGS_NONE;
 #endif
     state->ipc_handle = ipc_handle;
 
@@ -507,44 +597,16 @@ int block_device_tipc_init(struct block_device_tipc* state,
     }
 
     ret = block_device_tipc_init_rpmb_key(state->rpmb_state, rpmb_key,
-                                          rpmb_key_part_base, hwkey_session);
+                                          partitions.key.start, hwkey_session);
     if (ret < 0) {
         SS_ERR("%s: block_device_tipc_init_rpmb_key failed (%d)\n", __func__,
                ret);
         goto err_init_rpmb_key;
     }
 
-    if (BLOCK_COUNT_RPMB) {
-        rpmb_block_count = BLOCK_COUNT_RPMB;
-        ret = rpmb_check(state->rpmb_state,
-                         rpmb_block_count * BLOCK_SIZE_RPMB_BLOCKS - 1);
-        if (ret) {
-            SS_ERR("%s: bad static rpmb size, %d\n", __func__,
-                   rpmb_block_count);
-            goto err_bad_rpmb_size;
-        }
-    } else {
-        rpmb_block_count = rpmb_search_size(state->rpmb_state,
-                                            0); /* TODO: get hint from ns */
-        rpmb_block_count /= BLOCK_SIZE_RPMB_BLOCKS;
-    }
-    if (rpmb_block_count < rpmb_part2_base) {
-        ret = -1;
-        SS_ERR("%s: bad rpmb size, %d\n", __func__, rpmb_block_count);
-        goto err_bad_rpmb_size;
-    }
-
-    block_device_tipc_init_dev_rpmb(&state->dev_rpmb, state->rpmb_state,
-                                    rpmb_part2_base,
-                                    rpmb_block_count - rpmb_part2_base, false);
-
-    /* TODO: allow non-rpmb based tamper proof storage */
-    ret = fs_init(&state->tr_state_rpmb, file_system_id_tp, fs_key,
-                  &state->dev_rpmb.dev, &state->dev_rpmb.dev,
-                  FS_INIT_FLAGS_NONE);
+    ret = init_rpmb_fs(state, fs_key, partitions.rpmb_start);
     if (ret < 0) {
-        SS_ERR("%s: failed to initialize TP: %d\n", __func__, ret);
-        goto err_init_tr_state_rpmb;
+        goto err_init_rpmb_fs;
     }
 
     block_device_tipc_init_dev_ns(&state->dev_ns, state->ipc_handle, true);
@@ -573,6 +635,36 @@ int block_device_tipc_init(struct block_device_tipc* state,
         goto err_get_td_max_size;
     }
 
+    /* Request empty file system if file is empty */
+    ret = ns_read_pos(state->ipc_handle, state->dev_ns.ns_handle, 0, &probe,
+                      sizeof(probe));
+    if (ret < (int)sizeof(probe)) {
+        ns_init_flags |= FS_INIT_FLAGS_DO_CLEAR;
+    }
+
+    block_device_tipc_init_dev_rpmb(&state->dev_ns_rpmb, state->rpmb_state,
+                                    partitions.ns.start,
+                                    partitions.ns.block_count, true);
+
+#if STORAGE_NS_RECOVERY_CLEAR_ALLOWED
+    ns_init_flags |= FS_INIT_FLAGS_RECOVERY_CLEAR_ALLOWED;
+#endif
+
+    /*
+     * This must be false if STORAGE_NS_ALTERNATE_SUPERBLOCK_ALLOWED is
+     * false.
+     */
+    if (alternate_data_partition) {
+        ns_init_flags |= FS_INIT_FLAGS_ALTERNATE_DATA;
+    }
+
+    ret = fs_init(&state->tr_state_ns, file_system_id_td, fs_key,
+                  &state->dev_ns.dev, &state->dev_ns_rpmb.dev, ns_init_flags);
+    if (ret < 0) {
+        SS_ERR("%s: failed to initialize TD: %d\n", __func__, ret);
+        goto err_init_fs_ns_tr_state;
+    }
+
 #if HAS_FS_TDP
     block_device_tipc_init_dev_ns(&state->dev_ns_tdp, state->ipc_handle, false);
 
@@ -589,8 +681,8 @@ int block_device_tipc_init(struct block_device_tipc* state,
     }
 
     block_device_tipc_init_dev_rpmb(&state->dev_ns_tdp_rpmb, state->rpmb_state,
-                                    rpmb_part_sb_tdp_base,
-                                    rpmb_part_sb_ns_block_count, false);
+                                    partitions.tdp.start,
+                                    partitions.tdp.block_count, false);
 
 #if STORAGE_TDP_AUTO_CHECKPOINT_ENABLED
     if (!system_state_provisioning_allowed()) {
@@ -625,36 +717,6 @@ int block_device_tipc_init(struct block_device_tipc* state,
     }
 #endif
 #endif
-
-    /* Request empty file system if file is empty */
-    ret = ns_read_pos(state->ipc_handle, state->dev_ns.ns_handle, 0, &probe,
-                      sizeof(probe));
-    if (ret < (int)sizeof(probe)) {
-        ns_init_flags |= FS_INIT_FLAGS_DO_CLEAR;
-    }
-
-    block_device_tipc_init_dev_rpmb(&state->dev_ns_rpmb, state->rpmb_state,
-                                    rpmb_part1_base,
-                                    rpmb_part_sb_ns_block_count, true);
-
-#if STORAGE_NS_RECOVERY_CLEAR_ALLOWED
-    ns_init_flags |= FS_INIT_FLAGS_RECOVERY_CLEAR_ALLOWED;
-#endif
-
-    /*
-     * This must be false if STORAGE_NS_ALTERNATE_SUPERBLOCK_ALLOWED is
-     * false.
-     */
-    if (alternate_data_partition) {
-        ns_init_flags |= FS_INIT_FLAGS_ALTERNATE_DATA;
-    }
-
-    ret = fs_init(&state->tr_state_ns, file_system_id_td, fs_key,
-                  &state->dev_ns.dev, &state->dev_ns_rpmb.dev, ns_init_flags);
-    if (ret < 0) {
-        SS_ERR("%s: failed to initialize TD: %d\n", __func__, ret);
-        goto err_init_fs_ns_tr_state;
-    }
 
 #if HAS_FS_NSP
     block_device_tipc_init_dev_ns(&state->dev_ns_nsp, state->ipc_handle, false);
@@ -709,9 +771,6 @@ err_get_nsp_max_size:
     ns_close_file(state->ipc_handle, state->dev_ns_nsp.ns_handle);
 err_open_nsp:
 #endif
-    fs_destroy(&state->tr_state_ns);
-err_init_fs_ns_tr_state:
-    block_cache_dev_destroy(&state->dev_ns.dev);
 #if HAS_FS_TDP
     fs_destroy(&state->tr_state_ns_tdp);
 err_init_fs_ns_tdp_tr_state:
@@ -720,12 +779,13 @@ err_get_tdp_max_size:
     ns_close_file(state->ipc_handle, state->dev_ns_tdp.ns_handle);
 err_open_tdp:
 #endif
+    fs_destroy(&state->tr_state_ns);
+err_init_fs_ns_tr_state:
+    block_cache_dev_destroy(&state->dev_ns.dev);
 err_get_td_max_size:
     ns_close_file(state->ipc_handle, state->dev_ns.ns_handle);
-    fs_destroy(&state->tr_state_rpmb);
-err_init_tr_state_rpmb:
-    block_cache_dev_destroy(&state->dev_rpmb.dev);
-err_bad_rpmb_size:
+    destroy_rpmb_fs(state);
+err_init_rpmb_fs:
 err_init_rpmb_key:
     rpmb_uninit(state->rpmb_state);
 err_rpmb_init:
@@ -734,23 +794,22 @@ err_rpmb_init:
 
 void block_device_tipc_destroy(struct block_device_tipc* state) {
     if (block_device_tipc_has_ns(state)) {
-        fs_destroy(&state->tr_state_ns);
-        block_cache_dev_destroy(&state->dev_ns.dev);
-        ns_close_file(state->ipc_handle, state->dev_ns.ns_handle);
-#if HAS_FS_TDP
-        fs_destroy(&state->tr_state_ns_tdp);
-        block_cache_dev_destroy(&state->dev_ns_tdp.dev);
-        ns_close_file(state->ipc_handle, state->dev_ns_tdp.ns_handle);
-#endif
 #if HAS_FS_NSP
         fs_destroy(&state->tr_state_ns_nsp);
         block_cache_dev_destroy(&state->dev_ns_nsp.dev);
         ns_close_file(state->ipc_handle, state->dev_ns_nsp.ns_handle);
 #endif
+#if HAS_FS_TDP
+        fs_destroy(&state->tr_state_ns_tdp);
+        block_cache_dev_destroy(&state->dev_ns_tdp.dev);
+        ns_close_file(state->ipc_handle, state->dev_ns_tdp.ns_handle);
+#endif
+        fs_destroy(&state->tr_state_ns);
+        block_cache_dev_destroy(&state->dev_ns.dev);
+        ns_close_file(state->ipc_handle, state->dev_ns.ns_handle);
     }
 
-    fs_destroy(&state->tr_state_rpmb);
-    block_cache_dev_destroy(&state->dev_rpmb.dev);
+    destroy_rpmb_fs(state);
     rpmb_uninit(state->rpmb_state);
 }
 
@@ -761,6 +820,8 @@ bool block_device_tipc_fs_connected(struct block_device_tipc* self,
         return self->ipc_handle != 0;
     case STORAGE_TDEA:
         return self->ipc_handle != 0;
+    case STORAGE_TD:
+        return block_device_tipc_has_ns(self) && self->dev_ns.ipc_handle != 0;
     case STORAGE_TDP:
 #if HAS_FS_TDP
         return block_device_tipc_has_ns(self) &&
@@ -768,8 +829,6 @@ bool block_device_tipc_fs_connected(struct block_device_tipc* self,
 #else
         return block_device_tipc_fs_connected(self, STORAGE_TP);
 #endif
-    case STORAGE_TD:
-        return block_device_tipc_has_ns(self) && self->dev_ns.ipc_handle != 0;
     case STORAGE_NSP:
 #if HAS_FS_NSP
         return block_device_tipc_has_ns(self) &&
@@ -794,14 +853,14 @@ struct fs* block_device_tipc_get_fs(struct block_device_tipc* self,
         return &self->tr_state_rpmb;
     case STORAGE_TDEA:
         return &self->tr_state_rpmb;
+    case STORAGE_TD:
+        return &self->tr_state_ns;
     case STORAGE_TDP:
 #if HAS_FS_TDP
         return &self->tr_state_ns_tdp;
 #else
         return block_device_tipc_get_fs(self, STORAGE_TP);
 #endif
-    case STORAGE_TD:
-        return &self->tr_state_ns;
     case STORAGE_NSP:
 #if HAS_FS_NSP
         return &self->tr_state_ns_nsp;
