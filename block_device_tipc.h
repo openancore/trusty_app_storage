@@ -57,8 +57,8 @@ extern const char file_system_id_nsp[];
 enum storage_filesystem_type {
     STORAGE_TP,
     STORAGE_TDEA,
-    STORAGE_TDP,
     STORAGE_TD,
+    STORAGE_TDP,
     STORAGE_NSP,
     STORAGE_FILESYSTEMS_COUNT,
 };
@@ -100,6 +100,10 @@ struct block_device_ns {
  *                         @ipc_handle.
  * @dev_rpmb:              The rpmb block device backing @tr_state_rpmb.
  * @tr_state_rpmb:         Filesystem for rpmb (TP, TDEA).
+ * @dev_ns:                The rpmb block device containing the superblock for
+ *                         @tr_state_ns.
+ * @dev_ns_rpmb:           The rpmb block device backing @tr_state_ns.
+ * @tr_state_ns:           Filesystem for TD.
  * @dev_ns_tdp:            The ns block device backing @tr_state_ns_tdp. Only
  *                         present when $HAS_FS_TDP defined.
  * @dev_ns_tdp_rpmb:       The rpmb block device containing the superblock for
@@ -107,10 +111,6 @@ struct block_device_ns {
  *                         defined.
  * @tr_state_ns_tdp:       Filesystem for TDP. Only present when $HAS_FS_TDP
  *                         defined.
- * @dev_ns:                The rpmb block device containing the superblock for
- *                         @tr_state_ns.
- * @dev_ns_rpmb:           The rpmb block device backing @tr_state_ns.
- * @tr_state_ns:           Filesystem for TD.
  * @dev_ns_nsp:            The ns block device backing @tr_state_ns_nsp. Only
  *                         present when $HAS_FS_NSP defined.
  * @dev_ns_nsp_superblock: The ns block device containing the superblock for
@@ -126,15 +126,15 @@ struct block_device_tipc {
     struct block_device_rpmb dev_rpmb;
     struct fs tr_state_rpmb;
 
+    struct block_device_ns dev_ns;
+    struct block_device_rpmb dev_ns_rpmb;
+    struct fs tr_state_ns;
+
 #if HAS_FS_TDP
     struct block_device_ns dev_ns_tdp;
     struct block_device_rpmb dev_ns_tdp_rpmb;
     struct fs tr_state_ns_tdp;
 #endif
-
-    struct block_device_ns dev_ns;
-    struct block_device_rpmb dev_ns_rpmb;
-    struct fs tr_state_ns;
 
 #if HAS_FS_NSP
     struct block_device_ns dev_ns_nsp;

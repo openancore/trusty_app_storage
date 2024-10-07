@@ -603,6 +603,36 @@ int block_device_tipc_init(struct block_device_tipc* state,
         goto err_get_td_max_size;
     }
 
+    /* Request empty file system if file is empty */
+    ret = ns_read_pos(state->ipc_handle, state->dev_ns.ns_handle, 0, &probe,
+                      sizeof(probe));
+    if (ret < (int)sizeof(probe)) {
+        ns_init_flags |= FS_INIT_FLAGS_DO_CLEAR;
+    }
+
+    block_device_tipc_init_dev_rpmb(&state->dev_ns_rpmb, state->rpmb_state,
+                                    partitions.ns.start,
+                                    partitions.ns.block_count, true);
+
+#if STORAGE_NS_RECOVERY_CLEAR_ALLOWED
+    ns_init_flags |= FS_INIT_FLAGS_RECOVERY_CLEAR_ALLOWED;
+#endif
+
+    /*
+     * This must be false if STORAGE_NS_ALTERNATE_SUPERBLOCK_ALLOWED is
+     * false.
+     */
+    if (alternate_data_partition) {
+        ns_init_flags |= FS_INIT_FLAGS_ALTERNATE_DATA;
+    }
+
+    ret = fs_init(&state->tr_state_ns, file_system_id_td, fs_key,
+                  &state->dev_ns.dev, &state->dev_ns_rpmb.dev, ns_init_flags);
+    if (ret < 0) {
+        SS_ERR("%s: failed to initialize TD: %d\n", __func__, ret);
+        goto err_init_fs_ns_tr_state;
+    }
+
 #if HAS_FS_TDP
     block_device_tipc_init_dev_ns(&state->dev_ns_tdp, state->ipc_handle, false);
 
@@ -655,36 +685,6 @@ int block_device_tipc_init(struct block_device_tipc* state,
     }
 #endif
 #endif
-
-    /* Request empty file system if file is empty */
-    ret = ns_read_pos(state->ipc_handle, state->dev_ns.ns_handle, 0, &probe,
-                      sizeof(probe));
-    if (ret < (int)sizeof(probe)) {
-        ns_init_flags |= FS_INIT_FLAGS_DO_CLEAR;
-    }
-
-    block_device_tipc_init_dev_rpmb(&state->dev_ns_rpmb, state->rpmb_state,
-                                    partitions.ns.start,
-                                    partitions.ns.block_count, true);
-
-#if STORAGE_NS_RECOVERY_CLEAR_ALLOWED
-    ns_init_flags |= FS_INIT_FLAGS_RECOVERY_CLEAR_ALLOWED;
-#endif
-
-    /*
-     * This must be false if STORAGE_NS_ALTERNATE_SUPERBLOCK_ALLOWED is
-     * false.
-     */
-    if (alternate_data_partition) {
-        ns_init_flags |= FS_INIT_FLAGS_ALTERNATE_DATA;
-    }
-
-    ret = fs_init(&state->tr_state_ns, file_system_id_td, fs_key,
-                  &state->dev_ns.dev, &state->dev_ns_rpmb.dev, ns_init_flags);
-    if (ret < 0) {
-        SS_ERR("%s: failed to initialize TD: %d\n", __func__, ret);
-        goto err_init_fs_ns_tr_state;
-    }
 
 #if HAS_FS_NSP
     block_device_tipc_init_dev_ns(&state->dev_ns_nsp, state->ipc_handle, false);
@@ -739,9 +739,6 @@ err_get_nsp_max_size:
     ns_close_file(state->ipc_handle, state->dev_ns_nsp.ns_handle);
 err_open_nsp:
 #endif
-    fs_destroy(&state->tr_state_ns);
-err_init_fs_ns_tr_state:
-    block_cache_dev_destroy(&state->dev_ns.dev);
 #if HAS_FS_TDP
     fs_destroy(&state->tr_state_ns_tdp);
 err_init_fs_ns_tdp_tr_state:
@@ -750,6 +747,9 @@ err_get_tdp_max_size:
     ns_close_file(state->ipc_handle, state->dev_ns_tdp.ns_handle);
 err_open_tdp:
 #endif
+    fs_destroy(&state->tr_state_ns);
+err_init_fs_ns_tr_state:
+    block_cache_dev_destroy(&state->dev_ns.dev);
 err_get_td_max_size:
     ns_close_file(state->ipc_handle, state->dev_ns.ns_handle);
     fs_destroy(&state->tr_state_rpmb);
@@ -764,19 +764,19 @@ err_rpmb_init:
 
 void block_device_tipc_destroy(struct block_device_tipc* state) {
     if (block_device_tipc_has_ns(state)) {
-        fs_destroy(&state->tr_state_ns);
-        block_cache_dev_destroy(&state->dev_ns.dev);
-        ns_close_file(state->ipc_handle, state->dev_ns.ns_handle);
-#if HAS_FS_TDP
-        fs_destroy(&state->tr_state_ns_tdp);
-        block_cache_dev_destroy(&state->dev_ns_tdp.dev);
-        ns_close_file(state->ipc_handle, state->dev_ns_tdp.ns_handle);
-#endif
 #if HAS_FS_NSP
         fs_destroy(&state->tr_state_ns_nsp);
         block_cache_dev_destroy(&state->dev_ns_nsp.dev);
         ns_close_file(state->ipc_handle, state->dev_ns_nsp.ns_handle);
 #endif
+#if HAS_FS_TDP
+        fs_destroy(&state->tr_state_ns_tdp);
+        block_cache_dev_destroy(&state->dev_ns_tdp.dev);
+        ns_close_file(state->ipc_handle, state->dev_ns_tdp.ns_handle);
+#endif
+        fs_destroy(&state->tr_state_ns);
+        block_cache_dev_destroy(&state->dev_ns.dev);
+        ns_close_file(state->ipc_handle, state->dev_ns.ns_handle);
     }
 
     fs_destroy(&state->tr_state_rpmb);
@@ -791,6 +791,8 @@ bool block_device_tipc_fs_connected(struct block_device_tipc* self,
         return self->ipc_handle != 0;
     case STORAGE_TDEA:
         return self->ipc_handle != 0;
+    case STORAGE_TD:
+        return block_device_tipc_has_ns(self) && self->dev_ns.ipc_handle != 0;
     case STORAGE_TDP:
 #if HAS_FS_TDP
         return block_device_tipc_has_ns(self) &&
@@ -798,8 +800,6 @@ bool block_device_tipc_fs_connected(struct block_device_tipc* self,
 #else
         return block_device_tipc_fs_connected(self, STORAGE_TP);
 #endif
-    case STORAGE_TD:
-        return block_device_tipc_has_ns(self) && self->dev_ns.ipc_handle != 0;
     case STORAGE_NSP:
 #if HAS_FS_NSP
         return block_device_tipc_has_ns(self) &&
@@ -824,14 +824,14 @@ struct fs* block_device_tipc_get_fs(struct block_device_tipc* self,
         return &self->tr_state_rpmb;
     case STORAGE_TDEA:
         return &self->tr_state_rpmb;
+    case STORAGE_TD:
+        return &self->tr_state_ns;
     case STORAGE_TDP:
 #if HAS_FS_TDP
         return &self->tr_state_ns_tdp;
 #else
         return block_device_tipc_get_fs(self, STORAGE_TP);
 #endif
-    case STORAGE_TD:
-        return &self->tr_state_ns;
     case STORAGE_NSP:
 #if HAS_FS_NSP
         return &self->tr_state_ns_nsp;
