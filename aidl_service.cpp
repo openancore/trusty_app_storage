@@ -743,8 +743,8 @@ void storage_aidl_enable(struct storage_service_aidl_context* self,
     storage_service::StorageService& service = self->inner->service;
     service.TryActivateFilesystem(block_devices, STORAGE_TP);
     service.TryActivateFilesystem(block_devices, STORAGE_TDEA);
-    service.TryActivateFilesystem(block_devices, STORAGE_TDP);
     service.TryActivateFilesystem(block_devices, STORAGE_TD);
+    service.TryActivateFilesystem(block_devices, STORAGE_TDP);
     service.TryActivateFilesystem(block_devices, STORAGE_NSP);
 }
 
@@ -752,8 +752,8 @@ void storage_aidl_disable(struct storage_service_aidl_context* self,
                           struct block_device_tipc* block_devices) {
     storage_service::StorageService& service = self->inner->service;
     service.DeactivateFilesystem(block_devices, STORAGE_NSP);
-    service.DeactivateFilesystem(block_devices, STORAGE_TD);
     service.DeactivateFilesystem(block_devices, STORAGE_TDP);
+    service.DeactivateFilesystem(block_devices, STORAGE_TD);
     service.DeactivateFilesystem(block_devices, STORAGE_TDEA);
     service.DeactivateFilesystem(block_devices, STORAGE_TP);
 }
