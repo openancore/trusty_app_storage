@@ -546,6 +546,99 @@ static void destroy_rpmb_fs(struct block_device_tipc* self) {
 }
 
 /**
+ * init_ns_fs() - Initialize @self's NS fs and its backing block devices.
+ * @self:      The struct block_device_tipc to modify
+ * @fs_key:    The key to use for the filesystem.
+ * @partition: The RPMB blocks to use for the filesystem's superblocks.
+ *
+ * If no ns filesystems are available, return ERR_NOT_READY and leave the NS fs
+ * uninitialized. (In that case, block_device_tipc_has_ns() will return false.)
+ *
+ * Return: NO_ERROR on success, error code less than 0 if an error was
+ * encountered during initialization.
+ */
+static int init_ns_fs(struct block_device_tipc* self,
+                      const struct key* fs_key,
+                      struct rpmb_span partition) {
+    block_device_tipc_init_dev_ns(&self->dev_ns, self->ipc_handle, true);
+
+    int ret =
+            ns_open_file(self->ipc_handle, "0", &self->dev_ns.ns_handle, true);
+    bool alternate_data_partition = false;
+    if (ret < 0) {
+        /*
+         * Only attempt to open the alternate file if allowed, and if not
+         * supported or available fall back to TP only.
+         */
+#if STORAGE_NS_ALTERNATE_SUPERBLOCK_ALLOWED
+        ret = ns_open_file(self->ipc_handle, "alternate/0",
+                           &self->dev_ns.ns_handle, true);
+#endif
+        if (ret >= 0) {
+            alternate_data_partition = true;
+        } else {
+            /* RPMB fs only */
+            self->dev_ns.dev.block_count = 0;
+            return ERR_NOT_READY;
+        }
+    }
+
+    ret = set_storage_size(self->ipc_handle, &self->dev_ns);
+    if (ret < 0) {
+        goto err_get_td_max_size;
+    }
+
+    /* Request empty file system if file is empty */
+    uint8_t probe;
+    uint32_t ns_init_flags = FS_INIT_FLAGS_NONE;
+    ret = ns_read_pos(self->ipc_handle, self->dev_ns.ns_handle, 0, &probe,
+                      sizeof(probe));
+    if (ret < (int)sizeof(probe)) {
+        ns_init_flags |= FS_INIT_FLAGS_DO_CLEAR;
+    }
+
+    block_device_tipc_init_dev_rpmb(&self->dev_ns_rpmb, self->rpmb_state,
+                                    partition.start, partition.block_count,
+                                    true);
+
+#if STORAGE_NS_RECOVERY_CLEAR_ALLOWED
+    ns_init_flags |= FS_INIT_FLAGS_RECOVERY_CLEAR_ALLOWED;
+#endif
+
+    /*
+     * This must be false if STORAGE_NS_ALTERNATE_SUPERBLOCK_ALLOWED is
+     * false.
+     */
+    if (alternate_data_partition) {
+        ns_init_flags |= FS_INIT_FLAGS_ALTERNATE_DATA;
+    }
+
+    ret = fs_init(&self->tr_state_ns, file_system_id_td, fs_key,
+                  &self->dev_ns.dev, &self->dev_ns_rpmb.dev, ns_init_flags);
+    if (ret < 0) {
+        SS_ERR("%s: failed to initialize TD: %d\n", __func__, ret);
+        goto err_init_fs_ns_tr_state;
+    }
+
+    return 0;
+
+err_init_fs_ns_tr_state:
+    block_cache_dev_destroy(&self->dev_ns.dev);
+err_get_td_max_size:
+    ns_close_file(self->ipc_handle, self->dev_ns.ns_handle);
+    return ret;
+}
+
+/**
+ * destroy_ns_fs() - Destroy @self's NS fs and its backing block devices.
+ */
+static void destroy_ns_fs(struct block_device_tipc* self) {
+    fs_destroy(&self->tr_state_ns);
+    block_cache_dev_destroy(&self->dev_ns.dev);
+    ns_close_file(self->ipc_handle, self->dev_ns.ns_handle);
+}
+
+/**
  * rpmb_span_end() - Calculates the first block past the end of @self.
  */
 static uint16_t rpmb_span_end(struct rpmb_span self) {
@@ -576,10 +669,6 @@ int block_device_tipc_init(struct block_device_tipc* state,
                            const struct key* fs_key,
                            const struct rpmb_key* rpmb_key,
                            hwkey_session_t hwkey_session) {
-    bool alternate_data_partition = false;
-    uint8_t probe;
-    uint32_t ns_init_flags = FS_INIT_FLAGS_NONE;
-
     int ret;
     struct rpmb_spans partitions;
     calculate_rpmb_spans(&partitions);
@@ -609,60 +698,15 @@ int block_device_tipc_init(struct block_device_tipc* state,
         goto err_init_rpmb_fs;
     }
 
-    block_device_tipc_init_dev_ns(&state->dev_ns, state->ipc_handle, true);
-
-    ret = ns_open_file(state->ipc_handle, "0", &state->dev_ns.ns_handle, true);
-    if (ret < 0) {
-        /*
-         * Only attempt to open the alternate file if allowed, and if not
-         * supported or available fall back to TP only.
-         */
-#if STORAGE_NS_ALTERNATE_SUPERBLOCK_ALLOWED
-        ret = ns_open_file(state->ipc_handle, "alternate/0",
-                           &state->dev_ns.ns_handle, true);
-#endif
-        if (ret >= 0) {
-            alternate_data_partition = true;
-        } else {
-            /* RPMB fs only */
-            state->dev_ns.dev.block_count = 0;
-            return 0;
-        }
-    }
-
-    ret = set_storage_size(state->ipc_handle, &state->dev_ns);
-    if (ret < 0) {
-        goto err_get_td_max_size;
-    }
-
-    /* Request empty file system if file is empty */
-    ret = ns_read_pos(state->ipc_handle, state->dev_ns.ns_handle, 0, &probe,
-                      sizeof(probe));
-    if (ret < (int)sizeof(probe)) {
-        ns_init_flags |= FS_INIT_FLAGS_DO_CLEAR;
-    }
-
-    block_device_tipc_init_dev_rpmb(&state->dev_ns_rpmb, state->rpmb_state,
-                                    partitions.ns.start,
-                                    partitions.ns.block_count, true);
-
-#if STORAGE_NS_RECOVERY_CLEAR_ALLOWED
-    ns_init_flags |= FS_INIT_FLAGS_RECOVERY_CLEAR_ALLOWED;
-#endif
-
-    /*
-     * This must be false if STORAGE_NS_ALTERNATE_SUPERBLOCK_ALLOWED is
-     * false.
-     */
-    if (alternate_data_partition) {
-        ns_init_flags |= FS_INIT_FLAGS_ALTERNATE_DATA;
-    }
-
-    ret = fs_init(&state->tr_state_ns, file_system_id_td, fs_key,
-                  &state->dev_ns.dev, &state->dev_ns_rpmb.dev, ns_init_flags);
-    if (ret < 0) {
-        SS_ERR("%s: failed to initialize TD: %d\n", __func__, ret);
-        goto err_init_fs_ns_tr_state;
+    ret = init_ns_fs(state, fs_key, partitions.ns);
+    if (ret == ERR_NOT_READY) {
+        /* If we don't currently have ns access, we didn't actually initialize
+         * `tr_state_ns`. Trying to init any other ns-dependent fr would fail,
+         * so skip them. */
+        assert(!block_device_tipc_has_ns(state));
+        return 0;
+    } else if (ret < 0) {
+        goto err_init_ns_fs;
     }
 
 #if HAS_FS_TDP
@@ -779,11 +823,8 @@ err_get_tdp_max_size:
     ns_close_file(state->ipc_handle, state->dev_ns_tdp.ns_handle);
 err_open_tdp:
 #endif
-    fs_destroy(&state->tr_state_ns);
-err_init_fs_ns_tr_state:
-    block_cache_dev_destroy(&state->dev_ns.dev);
-err_get_td_max_size:
-    ns_close_file(state->ipc_handle, state->dev_ns.ns_handle);
+    destroy_ns_fs(state);
+err_init_ns_fs:
     destroy_rpmb_fs(state);
 err_init_rpmb_fs:
 err_init_rpmb_key:
@@ -804,9 +845,7 @@ void block_device_tipc_destroy(struct block_device_tipc* state) {
         block_cache_dev_destroy(&state->dev_ns_tdp.dev);
         ns_close_file(state->ipc_handle, state->dev_ns_tdp.ns_handle);
 #endif
-        fs_destroy(&state->tr_state_ns);
-        block_cache_dev_destroy(&state->dev_ns.dev);
-        ns_close_file(state->ipc_handle, state->dev_ns.ns_handle);
+        destroy_ns_fs(state);
     }
 
     destroy_rpmb_fs(state);
