@@ -722,6 +722,77 @@ static void destroy_tdp_fs(struct block_device_tipc* self) {
 }
 #endif
 
+#if HAS_FS_NSP
+/**
+ * init_nsp_fs() - Initialize @self's NSP fs and its backing block devices.
+ * @self:      The struct block_device_tipc to modify
+ * @fs_key:    The key to use for the filesystem.
+ *
+ * Return: NO_ERROR on success, error code less than 0 on error.
+ */
+static int init_nsp_fs(struct block_device_tipc* self,
+                       const struct key* fs_key) {
+    block_device_tipc_init_dev_ns(&self->dev_ns_nsp, self->ipc_handle, false);
+
+    int ret = ns_open_file(self->ipc_handle, "persist/nsp",
+                           &self->dev_ns_nsp.ns_handle, true);
+    if (ret < 0) {
+        SS_ERR("%s: failed to open NSP file (%d)\n", __func__, ret);
+        goto err_open_nsp;
+    }
+
+    ret = set_storage_size(self->ipc_handle, &self->dev_ns_nsp);
+    if (ret < 0) {
+        goto err_get_nsp_max_size;
+    }
+
+    ret = fs_init(&self->tr_state_ns_nsp, file_system_id_nsp, fs_key,
+                  &self->dev_ns_nsp.dev, &self->dev_ns_nsp.dev,
+                  FS_INIT_FLAGS_RECOVERY_CLEAR_ALLOWED |
+                          FS_INIT_FLAGS_ALLOW_TAMPERING);
+    if (ret < 0) {
+        SS_ERR("%s: failed to initialize NSP: %d\n", __func__, ret);
+        goto err_init_fs_ns_nsp_tr_state;
+    }
+
+    /*
+     * Check that all files are accessible and attempt to clear the FS if files
+     * cannot be accessed.
+     */
+    if (fs_check(&self->tr_state_ns_nsp) != FS_CHECK_NO_ERROR) {
+        SS_ERR("%s: NSP filesystem check failed, attempting to clear\n",
+               __func__);
+        fs_destroy(&self->tr_state_ns_nsp);
+        block_cache_dev_destroy(&self->dev_ns_nsp.dev);
+
+        ret = fs_init(&self->tr_state_ns_nsp, file_system_id_nsp, fs_key,
+                      &self->dev_ns_nsp.dev, &self->dev_ns_nsp.dev,
+                      FS_INIT_FLAGS_DO_CLEAR | FS_INIT_FLAGS_ALLOW_TAMPERING);
+        if (ret < 0) {
+            SS_ERR("%s: failed to initialize NSP: %d\n", __func__, ret);
+            goto err_init_fs_ns_nsp_tr_state;
+        }
+    }
+    return 0;
+
+err_init_fs_ns_nsp_tr_state:
+    block_cache_dev_destroy(&self->dev_ns_nsp.dev);
+err_get_nsp_max_size:
+    ns_close_file(self->ipc_handle, self->dev_ns_nsp.ns_handle);
+err_open_nsp:
+    return ret;
+}
+
+/**
+ * destroy_nsp_fs() - Destroy @self's NSP fs and its backing block devices.
+ */
+static void destroy_nsp_fs(struct block_device_tipc* self) {
+    fs_destroy(&self->tr_state_ns_nsp);
+    block_cache_dev_destroy(&self->dev_ns_nsp.dev);
+    ns_close_file(self->ipc_handle, self->dev_ns_nsp.ns_handle);
+}
+#endif
+
 /**
  * rpmb_span_end() - Calculates the first block past the end of @self.
  */
@@ -798,57 +869,17 @@ int block_device_tipc_init(struct block_device_tipc* state,
 #endif
 
 #if HAS_FS_NSP
-    block_device_tipc_init_dev_ns(&state->dev_ns_nsp, state->ipc_handle, false);
-
-    ret = ns_open_file(state->ipc_handle, "persist/nsp",
-                       &state->dev_ns_nsp.ns_handle, true);
+    ret = init_nsp_fs(state, fs_key);
     if (ret < 0) {
-        SS_ERR("%s: failed to open NSP file (%d)\n", __func__, ret);
-        goto err_open_nsp;
-    }
-
-    ret = set_storage_size(state->ipc_handle, &state->dev_ns_nsp);
-    if (ret < 0) {
-        goto err_get_nsp_max_size;
-    }
-
-    ret = fs_init(&state->tr_state_ns_nsp, file_system_id_nsp, fs_key,
-                  &state->dev_ns_nsp.dev, &state->dev_ns_nsp.dev,
-                  FS_INIT_FLAGS_RECOVERY_CLEAR_ALLOWED |
-                          FS_INIT_FLAGS_ALLOW_TAMPERING);
-    if (ret < 0) {
-        SS_ERR("%s: failed to initialize NSP: %d\n", __func__, ret);
-        goto err_init_fs_ns_nsp_tr_state;
-    }
-
-    /*
-     * Check that all files are accessible and attempt to clear the FS if files
-     * cannot be accessed.
-     */
-    if (fs_check(&state->tr_state_ns_nsp) != FS_CHECK_NO_ERROR) {
-        SS_ERR("%s: NSP filesystem check failed, attempting to clear\n",
-               __func__);
-        fs_destroy(&state->tr_state_ns_nsp);
-        block_cache_dev_destroy(&state->dev_ns_nsp.dev);
-
-        ret = fs_init(&state->tr_state_ns_nsp, file_system_id_nsp, fs_key,
-                      &state->dev_ns_nsp.dev, &state->dev_ns_nsp.dev,
-                      FS_INIT_FLAGS_DO_CLEAR | FS_INIT_FLAGS_ALLOW_TAMPERING);
-        if (ret < 0) {
-            SS_ERR("%s: failed to initialize NSP: %d\n", __func__, ret);
-            goto err_init_fs_ns_nsp_tr_state;
-        }
+        goto err_init_nsp_fs;
     }
 #endif
 
     return 0;
 
 #if HAS_FS_NSP
-err_init_fs_ns_nsp_tr_state:
-    block_cache_dev_destroy(&state->dev_ns_nsp.dev);
-err_get_nsp_max_size:
-    ns_close_file(state->ipc_handle, state->dev_ns_nsp.ns_handle);
-err_open_nsp:
+    destroy_nsp_fs(state);
+err_init_nsp_fs:
 #endif
 #if HAS_FS_TDP
     destroy_tdp_fs(state);
@@ -867,9 +898,7 @@ err_rpmb_init:
 void block_device_tipc_destroy(struct block_device_tipc* state) {
     if (block_device_tipc_has_ns(state)) {
 #if HAS_FS_NSP
-        fs_destroy(&state->tr_state_ns_nsp);
-        block_cache_dev_destroy(&state->dev_ns_nsp.dev);
-        ns_close_file(state->ipc_handle, state->dev_ns_nsp.ns_handle);
+        destroy_nsp_fs(state);
 #endif
 #if HAS_FS_TDP
         destroy_tdp_fs(state);
