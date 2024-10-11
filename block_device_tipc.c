@@ -638,6 +638,90 @@ static void destroy_ns_fs(struct block_device_tipc* self) {
     ns_close_file(self->ipc_handle, self->dev_ns.ns_handle);
 }
 
+#if HAS_FS_TDP
+/**
+ * init_tdp_fs() - Initialize @self's TDP fs and its backing block devices.
+ * @self:      The struct block_device_tipc to modify
+ * @fs_key:    The key to use for the filesystem.
+ * @partition: The RPMB blocks to use for the filesystem's superblocks.
+ *
+ * Return: NO_ERROR on success, error code less than 0 on error.
+ */
+static int init_tdp_fs(struct block_device_tipc* self,
+                       const struct key* fs_key,
+                       struct rpmb_span partition) {
+    block_device_tipc_init_dev_ns(&self->dev_ns_tdp, self->ipc_handle, false);
+
+    int ret = ns_open_file(self->ipc_handle, "persist/0",
+                           &self->dev_ns_tdp.ns_handle, true);
+    if (ret < 0) {
+        SS_ERR("%s: failed to open tdp file (%d)\n", __func__, ret);
+        goto err_open_tdp;
+    }
+
+    ret = set_storage_size(self->ipc_handle, &self->dev_ns_tdp);
+    if (ret < 0) {
+        goto err_get_tdp_max_size;
+    }
+
+    block_device_tipc_init_dev_rpmb(&self->dev_ns_tdp_rpmb, self->rpmb_state,
+                                    partition.start, partition.block_count,
+                                    false);
+
+    uint32_t tdp_init_flags = FS_INIT_FLAGS_NONE;
+#if STORAGE_TDP_AUTO_CHECKPOINT_ENABLED
+    if (!system_state_provisioning_allowed()) {
+        /*
+         * Automatically create a checkpoint if we are done provisioning but do
+         * not already have a checkpoint.
+         */
+        tdp_init_flags |= FS_INIT_FLAGS_AUTO_CHECKPOINT;
+    }
+#endif
+
+    ret = fs_init(&self->tr_state_ns_tdp, file_system_id_tdp, fs_key,
+                  &self->dev_ns_tdp.dev, &self->dev_ns_tdp_rpmb.dev,
+                  tdp_init_flags);
+    if (ret < 0) {
+        goto err_init_fs_ns_tdp_tr_state;
+    }
+
+#if STORAGE_TDP_RECOVERY_CHECKPOINT_RESTORE_ALLOWED
+    if (fs_check(&self->tr_state_ns_tdp) == FS_CHECK_INVALID_BLOCK) {
+        SS_ERR("%s: TDP filesystem check failed with invalid block, "
+               "attempting to restore checkpoint\n",
+               __func__);
+        fs_destroy(&self->tr_state_ns_tdp);
+        ret = fs_init(&self->tr_state_ns_tdp, file_system_id_tdp, fs_key,
+                      &self->dev_ns_tdp.dev, &self->dev_ns_tdp_rpmb.dev,
+                      tdp_init_flags | FS_INIT_FLAGS_RESTORE_CHECKPOINT);
+        if (ret < 0) {
+            SS_ERR("%s: failed to initialize TDP: %d\n", __func__, ret);
+            goto err_init_fs_ns_tdp_tr_state;
+        }
+    }
+#endif
+
+    return 0;
+
+err_init_fs_ns_tdp_tr_state:
+    block_cache_dev_destroy(&self->dev_ns_tdp.dev);
+err_get_tdp_max_size:
+    ns_close_file(self->ipc_handle, self->dev_ns_tdp.ns_handle);
+err_open_tdp:
+    return ret;
+}
+
+/**
+ * destroy_tdp_fs() - Destroy @self's TDP fs and its backing block devices.
+ */
+static void destroy_tdp_fs(struct block_device_tipc* self) {
+    fs_destroy(&self->tr_state_ns_tdp);
+    block_cache_dev_destroy(&self->dev_ns_tdp.dev);
+    ns_close_file(self->ipc_handle, self->dev_ns_tdp.ns_handle);
+}
+#endif
+
 /**
  * rpmb_span_end() - Calculates the first block past the end of @self.
  */
@@ -673,9 +757,6 @@ int block_device_tipc_init(struct block_device_tipc* state,
     struct rpmb_spans partitions;
     calculate_rpmb_spans(&partitions);
 
-#if HAS_FS_TDP
-    uint32_t tdp_init_flags = FS_INIT_FLAGS_NONE;
-#endif
     state->ipc_handle = ipc_handle;
 
     /* init rpmb */
@@ -710,56 +791,10 @@ int block_device_tipc_init(struct block_device_tipc* state,
     }
 
 #if HAS_FS_TDP
-    block_device_tipc_init_dev_ns(&state->dev_ns_tdp, state->ipc_handle, false);
-
-    ret = ns_open_file(state->ipc_handle, "persist/0",
-                       &state->dev_ns_tdp.ns_handle, true);
+    ret = init_tdp_fs(state, fs_key, partitions.tdp);
     if (ret < 0) {
-        SS_ERR("%s: failed to open tdp file (%d)\n", __func__, ret);
-        goto err_open_tdp;
+        goto err_init_tdp_fs;
     }
-
-    ret = set_storage_size(state->ipc_handle, &state->dev_ns_tdp);
-    if (ret < 0) {
-        goto err_get_tdp_max_size;
-    }
-
-    block_device_tipc_init_dev_rpmb(&state->dev_ns_tdp_rpmb, state->rpmb_state,
-                                    partitions.tdp.start,
-                                    partitions.tdp.block_count, false);
-
-#if STORAGE_TDP_AUTO_CHECKPOINT_ENABLED
-    if (!system_state_provisioning_allowed()) {
-        /*
-         * Automatically create a checkpoint if we are done provisioning but do
-         * not already have a checkpoint.
-         */
-        tdp_init_flags |= FS_INIT_FLAGS_AUTO_CHECKPOINT;
-    }
-#endif
-
-    ret = fs_init(&state->tr_state_ns_tdp, file_system_id_tdp, fs_key,
-                  &state->dev_ns_tdp.dev, &state->dev_ns_tdp_rpmb.dev,
-                  tdp_init_flags);
-    if (ret < 0) {
-        SS_ERR("%s: failed to initialize TDP: %d\n", __func__, ret);
-        goto err_init_fs_ns_tdp_tr_state;
-    }
-
-#if STORAGE_TDP_RECOVERY_CHECKPOINT_RESTORE_ALLOWED
-    if (fs_check(&state->tr_state_ns_tdp) == FS_CHECK_INVALID_BLOCK) {
-        SS_ERR("%s: TDP filesystem check failed with invalid block, "
-               "attempting to restore checkpoint\n",
-               __func__);
-        fs_destroy(&state->tr_state_ns_tdp);
-        ret = fs_init(&state->tr_state_ns_tdp, file_system_id_tdp, fs_key,
-                      &state->dev_ns_tdp.dev, &state->dev_ns_tdp_rpmb.dev,
-                      tdp_init_flags | FS_INIT_FLAGS_RESTORE_CHECKPOINT);
-        if (ret < 0) {
-            goto err_init_fs_ns_tdp_tr_state;
-        }
-    }
-#endif
 #endif
 
 #if HAS_FS_NSP
@@ -816,12 +851,8 @@ err_get_nsp_max_size:
 err_open_nsp:
 #endif
 #if HAS_FS_TDP
-    fs_destroy(&state->tr_state_ns_tdp);
-err_init_fs_ns_tdp_tr_state:
-    block_cache_dev_destroy(&state->dev_ns_tdp.dev);
-err_get_tdp_max_size:
-    ns_close_file(state->ipc_handle, state->dev_ns_tdp.ns_handle);
-err_open_tdp:
+    destroy_tdp_fs(state);
+err_init_tdp_fs:
 #endif
     destroy_ns_fs(state);
 err_init_ns_fs:
@@ -841,9 +872,7 @@ void block_device_tipc_destroy(struct block_device_tipc* state) {
         ns_close_file(state->ipc_handle, state->dev_ns_nsp.ns_handle);
 #endif
 #if HAS_FS_TDP
-        fs_destroy(&state->tr_state_ns_tdp);
-        block_cache_dev_destroy(&state->dev_ns_tdp.dev);
-        ns_close_file(state->ipc_handle, state->dev_ns_tdp.ns_handle);
+        destroy_tdp_fs(state);
 #endif
         destroy_ns_fs(state);
     }
