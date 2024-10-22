@@ -35,7 +35,7 @@
 
 int main(void) {
     struct proxy_connect_context ctx = {
-            .aidl_ctx = STORAGE_SERVICE_AIDL_CONTEXT_INITIAL_VALUE(.aidl_ctx),
+            .service = STORAGE_SERVICE_INITIAL_VALUE(.service),
             .tipc_ctx = {.ops = {.on_connect = proxy_connect}},
     };
     uint32_t acl_flags = IPC_PORT_ALLOW_TA_CONNECT | IPC_PORT_ALLOW_NS_CONNECT;
@@ -49,14 +49,8 @@ int main(void) {
         return EXIT_FAILURE;
     }
 
-    int rc = storage_aidl_create_service(&ctx.aidl_ctx, hset);
-    if (rc < 0) {
-        SS_ERR("fatal: unable to initialize aidl endpoint (%d)\n", rc);
-        return rc;
-    }
-
-    rc = ipc_port_create(hset, &ctx.tipc_ctx, STORAGE_DISK_PROXY_PORT, 1,
-                         STORAGE_MAX_BUFFER_SIZE, acl_flags);
+    int rc = ipc_port_create(hset, &ctx.tipc_ctx, STORAGE_DISK_PROXY_PORT, 1,
+                             STORAGE_MAX_BUFFER_SIZE, acl_flags);
     if (rc < 0) {
         SS_ERR("fatal: unable to initialize proxy endpoint (%d)\n", rc);
         return rc;
@@ -69,7 +63,6 @@ int main(void) {
         return rc;
     }
     rc = tipc_run_event_loop(hset);
-    storage_aidl_destroy_service(&ctx.aidl_ctx);
-    ipc_port_destroy(&ctx.tipc_ctx);
+    proxy_destroy(&ctx);
     return rc;
 }
