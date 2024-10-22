@@ -96,6 +96,11 @@ const char file_system_id_tdp[] = "tdp";
 const char file_system_id_tp[] = "tp";
 const char file_system_id_nsp[] = "nsp";
 
+const char ns_filename[] = "0";
+const char ns_alternate_filename[] = "alternate/0";
+const char tdp_filename[] = "persist/0";
+const char nsp_filename[] = "persist/nsp";
+
 struct rpmb_key_derivation_in {
     uint8_t prefix[sizeof(struct key)];
     uint8_t block_data[RPMB_BUF_SIZE];
@@ -546,41 +551,92 @@ static void destroy_rpmb_fs(struct block_device_tipc* self) {
 }
 
 /**
+ * block_device_ns_open_file() - Open an ns backing file
+ *
+ * @self: The ns block device to use to open the file.
+ * @name: The name of the file to open.
+ * @create: Whether the file should be created if it doesn't already exist.
+ *
+ * Return: NO_ERROR on success, error code less than 0 if an error was
+ * encountered during initialization.
+ */
+static int block_device_ns_open_file(struct block_device_ns* self,
+                                     const char* name,
+                                     bool create) {
+    return ns_open_file(self->ipc_handle, name, &self->ns_handle, create);
+}
+
+/**
+ * block_device_ns_open_file_with_alternate() - Open an ns backing file,
+ * possibly falling back to an alternate if the primary is not available.
+ *
+ * @self:           The ns block device to use to open the file.
+ * @name:           The name of the primary file to open.
+ * @alternate_name: The name of the alternate file. Ignored if
+ *                  STORAGE_NS_ALTERNATE_SUPERBLOCK_ALLOWED is false.
+ * @create:         Whether the file should be created if it doesn't already
+ *                  exist.
+ * @used_alternate: Out-param, set only on successful return. Will tell whether
+ *                  the opened file was the alternate.
+ *
+ * Return: NO_ERROR on success, error code less than 0 if an error was
+ * encountered during initialization.
+ */
+static int block_device_ns_open_file_with_alternate(
+        struct block_device_ns* self,
+        const char* name,
+        const char* alternate_name,
+        bool create,
+        bool* used_alternate) {
+    int ret = block_device_ns_open_file(self, name, create);
+    if (ret >= 0) {
+        *used_alternate = false;
+        return NO_ERROR;
+    }
+
+#if STORAGE_NS_ALTERNATE_SUPERBLOCK_ALLOWED
+    ret = block_device_ns_open_file(self, alternate_name, create);
+    if (ret >= 0) {
+        *used_alternate = true;
+        return NO_ERROR;
+    }
+#endif
+    return ret;
+}
+
+enum ns_init_result {
+    /* Negative codes reserved for other error values. */
+    NS_INIT_SUCCESS = 0,
+    NS_INIT_NOT_READY = 1,
+};
+
+/**
  * init_ns_fs() - Initialize @self's NS fs and its backing block devices.
  * @self:      The struct block_device_tipc to modify
  * @fs_key:    The key to use for the filesystem.
  * @partition: The RPMB blocks to use for the filesystem's superblocks.
  *
- * If no ns filesystems are available, return ERR_NOT_READY and leave the NS fs
- * uninitialized. (In that case, block_device_tipc_has_ns() will return false.)
+ * If no ns filesystems are available, return NS_INIT_NOT_READY and leave the NS
+ * fs uninitialized. (In that case, block_device_tipc_has_ns() will return
+ * false.)
  *
- * Return: NO_ERROR on success, error code less than 0 if an error was
- * encountered during initialization.
+ * Return: NS_INIT_SUCCESS on success, NS_INIT_NOT_READY if ns is unavailable,
+ * or an error code less than 0 if an error was encountered during
+ * initialization.
  */
 static int init_ns_fs(struct block_device_tipc* self,
                       const struct key* fs_key,
                       struct rpmb_span partition) {
     block_device_tipc_init_dev_ns(&self->dev_ns, self->ipc_handle, true);
 
-    int ret =
-            ns_open_file(self->ipc_handle, "0", &self->dev_ns.ns_handle, true);
-    bool alternate_data_partition = false;
+    bool alternate_data_partition;
+    int ret = block_device_ns_open_file_with_alternate(
+            &self->dev_ns, ns_filename, ns_alternate_filename, true,
+            &alternate_data_partition);
     if (ret < 0) {
-        /*
-         * Only attempt to open the alternate file if allowed, and if not
-         * supported or available fall back to TP only.
-         */
-#if STORAGE_NS_ALTERNATE_SUPERBLOCK_ALLOWED
-        ret = ns_open_file(self->ipc_handle, "alternate/0",
-                           &self->dev_ns.ns_handle, true);
-#endif
-        if (ret >= 0) {
-            alternate_data_partition = true;
-        } else {
-            /* RPMB fs only */
-            self->dev_ns.dev.block_count = 0;
-            return ERR_NOT_READY;
-        }
+        /* NS not available; init RPMB fs only */
+        self->dev_ns.dev.block_count = 0;
+        return NS_INIT_NOT_READY;
     }
 
     ret = set_storage_size(self->ipc_handle, &self->dev_ns);
@@ -620,7 +676,7 @@ static int init_ns_fs(struct block_device_tipc* self,
         goto err_init_fs_ns_tr_state;
     }
 
-    return 0;
+    return NS_INIT_SUCCESS;
 
 err_init_fs_ns_tr_state:
     block_cache_dev_destroy(&self->dev_ns.dev);
@@ -635,7 +691,6 @@ err_get_td_max_size:
 static void destroy_ns_fs(struct block_device_tipc* self) {
     fs_destroy(&self->tr_state_ns);
     block_cache_dev_destroy(&self->dev_ns.dev);
-    ns_close_file(self->ipc_handle, self->dev_ns.ns_handle);
 }
 
 #if HAS_FS_TDP
@@ -652,8 +707,7 @@ static int init_tdp_fs(struct block_device_tipc* self,
                        struct rpmb_span partition) {
     block_device_tipc_init_dev_ns(&self->dev_ns_tdp, self->ipc_handle, false);
 
-    int ret = ns_open_file(self->ipc_handle, "persist/0",
-                           &self->dev_ns_tdp.ns_handle, true);
+    int ret = block_device_ns_open_file(&self->dev_ns_tdp, tdp_filename, true);
     if (ret < 0) {
         SS_ERR("%s: failed to open tdp file (%d)\n", __func__, ret);
         goto err_open_tdp;
@@ -718,7 +772,6 @@ err_open_tdp:
 static void destroy_tdp_fs(struct block_device_tipc* self) {
     fs_destroy(&self->tr_state_ns_tdp);
     block_cache_dev_destroy(&self->dev_ns_tdp.dev);
-    ns_close_file(self->ipc_handle, self->dev_ns_tdp.ns_handle);
 }
 #endif
 
@@ -734,8 +787,7 @@ static int init_nsp_fs(struct block_device_tipc* self,
                        const struct key* fs_key) {
     block_device_tipc_init_dev_ns(&self->dev_ns_nsp, self->ipc_handle, false);
 
-    int ret = ns_open_file(self->ipc_handle, "persist/nsp",
-                           &self->dev_ns_nsp.ns_handle, true);
+    int ret = block_device_ns_open_file(&self->dev_ns_nsp, nsp_filename, true);
     if (ret < 0) {
         SS_ERR("%s: failed to open NSP file (%d)\n", __func__, ret);
         goto err_open_nsp;
@@ -789,9 +841,60 @@ err_open_nsp:
 static void destroy_nsp_fs(struct block_device_tipc* self) {
     fs_destroy(&self->tr_state_ns_nsp);
     block_cache_dev_destroy(&self->dev_ns_nsp.dev);
-    ns_close_file(self->ipc_handle, self->dev_ns_nsp.ns_handle);
 }
 #endif
+
+static void block_device_ns_disconnect(struct block_device_ns* self) {
+    if (self->ipc_handle != INVALID_IPC_HANDLE) {
+        ns_close_file(self->ipc_handle, self->ns_handle);
+        self->ipc_handle = INVALID_IPC_HANDLE;
+    }
+}
+
+static int init_ns_backed_filesystems(struct block_device_tipc* self,
+                                      const struct key* fs_key,
+                                      struct rpmb_span ns_partition,
+                                      struct rpmb_span tdp_partition) {
+    int ret = init_ns_fs(self, fs_key, ns_partition);
+    if (ret == NS_INIT_NOT_READY) {
+        /* If we don't currently have ns access, we didn't actually initialize
+         * `tr_state_ns`. Trying to init any other ns-dependent fs would fail,
+         * so skip them. */
+        assert(!block_device_tipc_has_ns(self));
+        return 0;
+    } else if (ret < 0) {
+        goto err_init_ns_fs;
+    }
+
+#if HAS_FS_TDP
+    ret = init_tdp_fs(self, fs_key, tdp_partition);
+    if (ret < 0) {
+        goto err_init_tdp_fs;
+    }
+#endif
+
+#if HAS_FS_NSP
+    ret = init_nsp_fs(self, fs_key);
+    if (ret < 0) {
+        goto err_init_nsp_fs;
+    }
+#endif
+
+    return 0;
+
+#if HAS_FS_NSP
+err_init_nsp_fs:
+#endif
+#if HAS_FS_TDP
+    block_device_ns_disconnect(&self->dev_ns_tdp);
+    destroy_tdp_fs(self);
+err_init_tdp_fs:
+#endif
+    block_device_ns_disconnect(&self->dev_ns);
+    destroy_ns_fs(self);
+err_init_ns_fs:
+    return ret;
+}
 
 /**
  * rpmb_span_end() - Calculates the first block past the end of @self.
@@ -850,42 +953,14 @@ int block_device_tipc_init(struct block_device_tipc* state,
         goto err_init_rpmb_fs;
     }
 
-    ret = init_ns_fs(state, fs_key, partitions.ns);
-    if (ret == ERR_NOT_READY) {
-        /* If we don't currently have ns access, we didn't actually initialize
-         * `tr_state_ns`. Trying to init any other ns-dependent fr would fail,
-         * so skip them. */
-        assert(!block_device_tipc_has_ns(state));
-        return 0;
-    } else if (ret < 0) {
+    ret = init_ns_backed_filesystems(state, fs_key, partitions.ns,
+                                     partitions.tdp);
+    if (ret < 0) {
         goto err_init_ns_fs;
     }
 
-#if HAS_FS_TDP
-    ret = init_tdp_fs(state, fs_key, partitions.tdp);
-    if (ret < 0) {
-        goto err_init_tdp_fs;
-    }
-#endif
-
-#if HAS_FS_NSP
-    ret = init_nsp_fs(state, fs_key);
-    if (ret < 0) {
-        goto err_init_nsp_fs;
-    }
-#endif
-
     return 0;
 
-#if HAS_FS_NSP
-    destroy_nsp_fs(state);
-err_init_nsp_fs:
-#endif
-#if HAS_FS_TDP
-    destroy_tdp_fs(state);
-err_init_tdp_fs:
-#endif
-    destroy_ns_fs(state);
 err_init_ns_fs:
     destroy_rpmb_fs(state);
 err_init_rpmb_fs:
@@ -914,22 +989,23 @@ bool block_device_tipc_fs_connected(struct block_device_tipc* self,
                                     enum storage_filesystem_type fs_type) {
     switch (fs_type) {
     case STORAGE_TP:
-        return self->ipc_handle != 0;
+        return self->ipc_handle != INVALID_IPC_HANDLE;
     case STORAGE_TDEA:
-        return self->ipc_handle != 0;
+        return self->ipc_handle != INVALID_IPC_HANDLE;
     case STORAGE_TD:
-        return block_device_tipc_has_ns(self) && self->dev_ns.ipc_handle != 0;
+        return block_device_tipc_has_ns(self) &&
+               self->dev_ns.ipc_handle != INVALID_IPC_HANDLE;
     case STORAGE_TDP:
 #if HAS_FS_TDP
         return block_device_tipc_has_ns(self) &&
-               self->dev_ns_tdp.ipc_handle != 0;
+               self->dev_ns_tdp.ipc_handle != INVALID_IPC_HANDLE;
 #else
         return block_device_tipc_fs_connected(self, STORAGE_TP);
 #endif
     case STORAGE_NSP:
 #if HAS_FS_NSP
         return block_device_tipc_has_ns(self) &&
-               self->dev_ns_nsp.ipc_handle != 0;
+               self->dev_ns_nsp.ipc_handle != INVALID_IPC_HANDLE;
 #else
         return block_device_tipc_fs_connected(self, STORAGE_TDP);
 #endif
@@ -969,5 +1045,89 @@ struct fs* block_device_tipc_get_fs(struct block_device_tipc* self,
         SS_ERR("%s: Tried to init fs of unrecognized storage_filesystem type: (%d)\n",
                __func__, fs_type);
         return NULL;
+    }
+}
+
+int block_device_tipc_reconnect(struct block_device_tipc* self,
+                                handle_t ipc_handle,
+                                const struct key* fs_key) {
+    int ret;
+
+    assert(self->ipc_handle == INVALID_IPC_HANDLE);
+    /* rpmb_state keeps a pointer to this handle, so updating here will cause
+     * all the rpmb connections to use the new handle. */
+    self->ipc_handle = ipc_handle;
+
+    bool has_ns = block_device_tipc_has_ns(self);
+    if (!has_ns) {
+        struct rpmb_spans partitions;
+        calculate_rpmb_spans(&partitions);
+        ret = init_ns_backed_filesystems(self, fs_key, partitions.ns,
+                                         partitions.tdp);
+        if (ret < 0) {
+            SS_ERR("%s: failed to init NS backed filesystems (%d)\n", __func__,
+                   ret);
+            return ret;
+        }
+        return 0;
+    }
+
+    bool alternate_data_partition;
+    self->dev_ns.ipc_handle = ipc_handle;
+    ret = block_device_ns_open_file_with_alternate(&self->dev_ns, ns_filename,
+                                                   ns_alternate_filename, false,
+                                                   &alternate_data_partition);
+    if (ret < 0) {
+        /* NS not available right now; leave NS filesystems disconnected. */
+        self->dev_ns.ipc_handle = INVALID_IPC_HANDLE;
+        SS_ERR("%s: failed to reconnect ns filesystem (%d)\n", __func__, ret);
+        return 0;
+    }
+    assert(alternate_data_partition == self->tr_state_ns.alternate_data);
+#if HAS_FS_TDP
+    self->dev_ns_tdp.ipc_handle = ipc_handle;
+    ret = block_device_ns_open_file(&self->dev_ns_tdp, tdp_filename, false);
+    if (ret < 0) {
+        SS_ERR("%s: failed to reconnect tdp filesystem (%d)\n", __func__, ret);
+        self->dev_ns_tdp.ipc_handle = INVALID_IPC_HANDLE;
+        goto err_reconnect_tdp;
+    }
+#endif
+#if HAS_FS_NSP
+    self->dev_ns_nsp.ipc_handle = ipc_handle;
+    ret = block_device_ns_open_file(&self->dev_ns_nsp, nsp_filename, false);
+    if (ret < 0) {
+        SS_ERR("%s: failed to reconnect nsp filesystem (%d)\n", __func__, ret);
+        self->dev_ns_nsp.ipc_handle = INVALID_IPC_HANDLE;
+        goto err_reconnect_nsp;
+    }
+#endif
+
+    return 0;
+#if HAS_FS_NSP
+err_reconnect_nsp:
+#endif
+#if HAS_FS_TDP
+    block_device_ns_disconnect(&self->dev_ns_tdp);
+err_reconnect_tdp:
+#endif
+    block_device_ns_disconnect(&self->dev_ns);
+    return ret;
+}
+
+void block_device_tipc_disconnect(struct block_device_tipc* self) {
+    /* Must currently be connected to disconnect */
+    assert(self->ipc_handle != INVALID_IPC_HANDLE);
+    /* Disconnects rpmb */
+    self->ipc_handle = INVALID_IPC_HANDLE;
+
+    if (block_device_tipc_has_ns(self)) {
+        block_device_ns_disconnect(&self->dev_ns);
+#if HAS_FS_TDP
+        block_device_ns_disconnect(&self->dev_ns_tdp);
+#endif
+#if HAS_FS_NSP
+        block_device_ns_disconnect(&self->dev_ns_nsp);
+#endif
     }
 }

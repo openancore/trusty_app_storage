@@ -18,10 +18,55 @@
 #include <uapi/trusty_uuid.h>
 
 #include "aidl_service.h"
+#include "block_device_tipc.h"
+#include "crypt.h"
 #include "ipc.h"
+#include "tipc_service.h"
 
+#include "crypt.h"
+#include "ipc.h"
+#include "tipc_service.h"
+
+struct storage_service {
+    bool initialized;
+    struct key key;
+    struct block_device_tipc block_device;
+    struct storage_service_aidl_context aidl;
+};
+
+#define STORAGE_SERVICE_INITIAL_VALUE(self)                        \
+    (struct storage_service) {                                     \
+        .initialized = false,                                      \
+        .aidl = STORAGE_SERVICE_AIDL_CONTEXT_INITIAL_VALUE(.aidl), \
+    }
+
+/* SSSC (Secure Storage Session Context) */
+#define STORAGE_SESSION_MAGIC 0x53535343
+
+/**
+ * storage_session - Session that exists for the duration of a proxy connection
+ * @magic:        a sentinel value used for checking for data corruption.
+ *                Initialized to STORAGE_SESSION_MAGIC.
+ * @service:      storage app state that persists across connections
+ * @tipc:         tipc service accepting client connections and requests
+ * @proxy_ctx:    the context object on the proxy channel
+ */
+struct storage_session {
+    uint32_t magic;
+    struct storage_service* service;
+    struct storage_tipc_service tipc;
+
+    struct ipc_channel_context proxy_ctx;
+};
+
+/**
+ * proxy_connect_context - Context for opening a connection to storageproxy
+ *
+ * @service: storage app state
+ * @tipc_ctx: context object for the proxy port
+ */
 struct proxy_connect_context {
-    struct storage_service_aidl_context aidl_ctx;
+    struct storage_service service;
     struct ipc_port_context tipc_ctx;
 };
 
@@ -32,3 +77,13 @@ struct proxy_connect_context {
 struct ipc_channel_context* proxy_connect(struct ipc_port_context* parent_ctx,
                                           const uuid_t* peer_uuid,
                                           handle_t chan_handle);
+
+/** proxy_destroy() - Clean up a &struct proxy_connect_context
+ *
+ * Does not free @self.
+ *
+ * @self: The proxy context to delete. Must have been previously connected to
+ * the proxy (see &proxy_connect()), but no longer have an active connection
+ * (see &proxy_disconnect()).
+ */
+void proxy_destroy(struct proxy_connect_context* self);
