@@ -3088,7 +3088,7 @@ test_abort:;
 #define RUN_MODE_ALL NULL
 #define RUN_MODE_INIT_NO_COMMIT_SMALL "StorageInitNoCommitSmallTest"
 #define RUN_MODE_INIT_NO_COMMIT_LARGE "StorageInitNoCommitLargeTest"
-#define RUN_MODE_INIT_NO_COMMIT_CLEANUP "StorageInitNoCommitClenupTest"
+#define RUN_MODE_INIT_NO_COMMIT_CLEANUP "StorageInitNoCommitCleanupTest"
 #define RUN_MODE_INIT "StorageInitTest"
 #define RUN_MODE_CHECK "StorageCheckTest"
 #define RUN_MODE_CLEAN "StorageCleanTest"
