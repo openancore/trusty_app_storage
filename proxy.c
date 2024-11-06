@@ -156,53 +156,23 @@ err_alloc_service:
 static void storage_service_disconnect(struct storage_service* self) {
     storage_aidl_disable(&self->aidl, &self->block_device);
     block_device_tipc_disconnect(&self->block_device);
-    block_device_tipc_destroy(&self->block_device);
 }
 
 static int storage_service_reconnect(struct storage_service* self,
                                      handle_t chan_handle) {
-    int rc = hwkey_open();
+    int rc = block_device_tipc_reconnect(&self->block_device, chan_handle,
+                                         &self->key);
     if (rc < 0) {
-        SS_ERR("%s: hwkey init failed: %d\n", __func__, rc);
-        goto err_hwkey_open;
-    }
-
-    hwkey_session_t hwkey_session = (hwkey_session_t)rc;
-
-    struct rpmb_key* rpmb_key_ptr = NULL;
-    /* Init RPMB key */
-#if !WITH_HKDF_RPMB_KEY
-    struct rpmb_key rpmb_key;
-    rc = get_rpmb_auth_key(hwkey_session, rpmb_key.byte, sizeof(rpmb_key.byte));
-    if (rc < 0) {
-        SS_ERR("%s: can't get storage auth key: (%d)\n", __func__, rc);
-        goto err_get_rpmb_key;
-    }
-
-    rpmb_key_ptr = &rpmb_key;
-#endif
-
-    rc = block_device_tipc_init(&self->block_device, chan_handle, &self->key,
-                                rpmb_key_ptr, hwkey_session);
-    if (rc < 0) {
-        SS_ERR("%s: block_device_tipc_init failed (%d)\n", __func__, rc);
-        goto err_init_block_device;
+        return rc;
     }
 
     storage_aidl_enable(&self->aidl, &self->block_device);
     return NO_ERROR;
-
-err_init_block_device:
-#if !WITH_HKDF_RPMB_KEY
-err_get_rpmb_key:
-#endif
-    hwkey_close(hwkey_session);
-err_hwkey_open:
-    return rc;
 }
 
 static void storage_service_destroy(struct storage_service* self) {
     storage_aidl_destroy_service(&self->aidl);
+    block_device_tipc_destroy(&self->block_device);
 }
 
 struct ipc_channel_context* proxy_connect(struct ipc_port_context* parent_ctx,
