@@ -155,7 +155,7 @@ err_alloc_service:
 }
 
 static void storage_service_disconnect(struct storage_service* self) {
-    storage_aidl_disable(&self->aidl, &self->block_device);
+    storage_aidl_disable(&self->aidl);
     block_device_tipc_disconnect(&self->block_device);
 }
 

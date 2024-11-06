@@ -16,7 +16,7 @@
 
 #include "aidl_service.h"
 
-#include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -173,27 +173,17 @@ static Status get_fs(const Filesystem& filesystem,
 
 class StorageClientSession {
 public:
-    StorageClientSession(struct fs* fs,
-                         storage_filesystem_type fs_type,
-                         const uuid_t* peer)
-            : inner_(), fs_type_(fs_type), active_(false) {
+    StorageClientSession(struct fs* fs, bool* fs_active, const uuid_t* peer)
+            : inner_(), active_(fs_active) {
         storage_client_session_init(&inner_, fs, peer);
-        active_ = true;
     }
-    ~StorageClientSession() { Deactivate(); }
+    ~StorageClientSession() { storage_client_session_destroy(&inner_); }
 
-    storage_client_session* get() { return active_ ? &inner_ : nullptr; }
-    storage_filesystem_type fs_type() { return fs_type_; }
-
-    void Deactivate() {
-        active_ = false;
-        storage_client_session_destroy(&inner_);
-    }
+    storage_client_session* get() { return *active_ ? &inner_ : nullptr; }
 
 private:
     storage_client_session inner_;
-    storage_filesystem_type fs_type_;
-    bool active_;
+    bool* active_;
 };
 
 class Dir : public BnDir {
@@ -224,9 +214,7 @@ public:
         }
         storage_client_session* client_session = session->get();
         if (client_session == nullptr) {
-            return Status::fromExceptionCode(
-                    Status::EX_ILLEGAL_STATE,
-                    "Connection to underlying filesystem lost. Start a new session.");
+            return Status::fromStatusT(android::WOULD_BLOCK);
         }
 
         if (last_state_ == storage_file_list_flag::STORAGE_FILE_LIST_END) {
@@ -333,9 +321,7 @@ public:
         }
         storage_client_session* client_session = session->get();
         if (client_session == nullptr) {
-            return Status::fromExceptionCode(
-                    Status::EX_ILLEGAL_STATE,
-                    "Connection to underlying filesystem lost. Start a new session.");
+            return Status::fromStatusT(android::WOULD_BLOCK);
         }
 
         out->resize(
@@ -370,9 +356,7 @@ public:
         }
         storage_client_session* client_session = session->get();
         if (client_session == nullptr) {
-            return Status::fromExceptionCode(
-                    Status::EX_ILLEGAL_STATE,
-                    "Connection to underlying filesystem lost. Start a new session.");
+            return Status::fromStatusT(android::WOULD_BLOCK);
         }
 
         storage_err result =
@@ -395,9 +379,7 @@ public:
         }
         storage_client_session* client_session = session->get();
         if (client_session == nullptr) {
-            return Status::fromExceptionCode(
-                    Status::EX_ILLEGAL_STATE,
-                    "Connection to underlying filesystem lost. Start a new session.");
+            return Status::fromStatusT(android::WOULD_BLOCK);
         }
 
         uint64_t size;
@@ -429,9 +411,7 @@ public:
         }
         storage_client_session* client_session = session->get();
         if (client_session == nullptr) {
-            return Status::fromExceptionCode(
-                    Status::EX_ILLEGAL_STATE,
-                    "Connection to underlying filesystem lost. Start a new session.");
+            return Status::fromStatusT(android::WOULD_BLOCK);
         }
 
         storage_err result = storage_file_set_size(session->get(), file_handle_,
@@ -453,9 +433,7 @@ public:
         }
         storage_client_session* client_session = session->get();
         if (client_session == nullptr) {
-            return Status::fromExceptionCode(
-                    Status::EX_ILLEGAL_STATE,
-                    "Connection to underlying filesystem lost. Start a new session.");
+            return Status::fromStatusT(android::WOULD_BLOCK);
         }
 
         storage_err result = storage_file_move(
@@ -491,9 +469,7 @@ public:
                     sp<IFile>* out) final {
         storage_client_session* client_session = session_->get();
         if (client_session == nullptr) {
-            return Status::fromExceptionCode(
-                    Status::EX_ILLEGAL_STATE,
-                    "Connection to underlying filesystem lost. Start a new session.");
+            return Status::fromStatusT(android::WOULD_BLOCK);
         }
 
         uint32_t file_handle;
@@ -517,9 +493,7 @@ public:
     Status deleteFile(const std::string& file_name) final {
         storage_client_session* client_session = session_->get();
         if (client_session == nullptr) {
-            return Status::fromExceptionCode(
-                    Status::EX_ILLEGAL_STATE,
-                    "Connection to underlying filesystem lost. Start a new session.");
+            return Status::fromStatusT(android::WOULD_BLOCK);
         }
 
         storage_err err = storage_file_delete(
@@ -537,9 +511,7 @@ public:
                       CreationMode dest_create_mode) final {
         storage_client_session* client_session = session_->get();
         if (client_session == nullptr) {
-            return Status::fromExceptionCode(
-                    Status::EX_ILLEGAL_STATE,
-                    "Connection to underlying filesystem lost. Start a new session.");
+            return Status::fromStatusT(android::WOULD_BLOCK);
         }
 
         storage_err err = storage_file_move(
@@ -560,9 +532,7 @@ public:
                     "Service currently only supports opening the root dir.");
         }
         if (session_->get() == nullptr) {
-            return Status::fromExceptionCode(
-                    Status::EX_ILLEGAL_STATE,
-                    "Connection to underlying filesystem lost. Start a new session.");
+            return Status::fromStatusT(android::WOULD_BLOCK);
         }
 
         // TODO: Catch tampering?
@@ -581,9 +551,7 @@ private:
 
         storage_client_session* client_session = session_->get();
         if (client_session == nullptr) {
-            return Status::fromExceptionCode(
-                    Status::EX_ILLEGAL_STATE,
-                    "Connection to underlying filesystem lost. Start a new session.");
+            return Status::fromStatusT(android::WOULD_BLOCK);
         }
         storage_err result = storage_transaction_end(client_session, flags);
         return status_from_storage_err(result);
@@ -603,68 +571,47 @@ public:
             return result;
         }
 
-        struct fs* fs = filesystems_[fs_type];
-        if (fs == nullptr) {
+        if (!filesystems_active_[fs_type]) {
             return Status::fromStatusT(android::WOULD_BLOCK);
         }
 
-        std::erase_if(sessions_,
-                      [](const std::weak_ptr<StorageClientSession>& session) {
-                          return session.expired();
-                      });
-
-        *out = std::make_shared<StorageClientSession>(fs, fs_type, peer);
-        sessions_.emplace_back(*out);
+        *out = std::make_shared<StorageClientSession>(
+                filesystems_[fs_type], &filesystems_active_[fs_type], peer);
         return Status::ok();
     }
 
-    void DeactivateFilesystem(struct block_device_tipc* block_devices,
-                              storage_filesystem_type fs_type) {
-        if (filesystems_[fs_type] == nullptr &&
-            block_device_tipc_fs_connected(block_devices, fs_type)) {
-            SS_ERR("Deactivating fs that's already inactive: %d", fs_type);
+    void DeactivateFilesystem(storage_filesystem_type fs_type) {
+        if (!filesystems_active_[fs_type]) {
+            // The filesystem might be still be inactive because it wasn't
+            // connected when storage_aidl_enable was called, like NS-backed
+            // filesystems would be before NS is available.
             return;
         }
 
-        filesystems_[fs_type] = nullptr;
-
-        for (auto it = sessions_.begin(); it != sessions_.end();) {
-            auto session = it->lock();
-            if (session == nullptr) {
-                it = sessions_.erase(it);
-                continue;
-            }
-
-            if (session->fs_type() == fs_type) {
-                session->Deactivate();
-            }
-            ++it;
-        }
+        filesystems_active_[fs_type] = false;
     }
 
     void TryActivateFilesystem(struct block_device_tipc* block_devices,
                                storage_filesystem_type fs_type) {
-        if (filesystems_[fs_type] != nullptr) {
-            SS_ERR("Reactivating fs that's already active: %d", fs_type);
-            DeactivateFilesystem(block_devices, fs_type);
-        }
+        assert(!filesystems_active_[fs_type]);
 
         if (!block_device_tipc_fs_connected(block_devices, fs_type)) {
             return;
         }
 
-        filesystems_[fs_type] =
-                block_device_tipc_get_fs(block_devices, fs_type);
-
-        std::erase_if(sessions_,
-                      [](const std::weak_ptr<StorageClientSession>& session) {
-                          return session.expired();
-                      });
+        if (filesystems_[fs_type] == nullptr) {
+            filesystems_[fs_type] =
+                    block_device_tipc_get_fs(block_devices, fs_type);
+        } else {
+            assert(filesystems_[fs_type] ==
+                   block_device_tipc_get_fs(block_devices, fs_type));
+        }
+        filesystems_active_[fs_type] = true;
     }
 
 private:
     std::array<struct fs*, STORAGE_FILESYSTEMS_COUNT> filesystems_;
-    std::vector<std::weak_ptr<StorageClientSession>> sessions_;
+    std::array<bool, STORAGE_FILESYSTEMS_COUNT> filesystems_active_;
 };
 
 class SecureStorage : public BnSecureStorage {
@@ -748,12 +695,11 @@ void storage_aidl_enable(struct storage_service_aidl_context* self,
     service.TryActivateFilesystem(block_devices, STORAGE_NSP);
 }
 
-void storage_aidl_disable(struct storage_service_aidl_context* self,
-                          struct block_device_tipc* block_devices) {
+void storage_aidl_disable(struct storage_service_aidl_context* self) {
     storage_service::StorageService& service = self->inner->service;
-    service.DeactivateFilesystem(block_devices, STORAGE_NSP);
-    service.DeactivateFilesystem(block_devices, STORAGE_TDP);
-    service.DeactivateFilesystem(block_devices, STORAGE_TD);
-    service.DeactivateFilesystem(block_devices, STORAGE_TDEA);
-    service.DeactivateFilesystem(block_devices, STORAGE_TP);
+    service.DeactivateFilesystem(STORAGE_NSP);
+    service.DeactivateFilesystem(STORAGE_TDP);
+    service.DeactivateFilesystem(STORAGE_TD);
+    service.DeactivateFilesystem(STORAGE_TDEA);
+    service.DeactivateFilesystem(STORAGE_TP);
 }
