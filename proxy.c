@@ -138,6 +138,7 @@ static int storage_service_init(struct storage_service* self,
     storage_aidl_enable(&self->aidl, &self->block_device);
 
     hwkey_close(hwkey_session);
+    self->initialized = true;
     return NO_ERROR;
 
 err_aidl_create_service:
