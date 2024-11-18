@@ -72,14 +72,11 @@ void storage_aidl_enable(struct storage_service_aidl_context* self,
  * storage_aidl_disable() - Disconnect the storage aidl service from backing
  * filesystems.
  * @self: The &struct storage_service_aidl_context to modify.
- * @block_devices: Context holding the filesystems to disconnect from. Must be
- * the same &struct block_device_tipc used to enable @self.
  *
  * Callers must only disable a service that has been previously enabled (with
  * storage_aidl_enable()), and must not disable an already-disabled service.
  */
-void storage_aidl_disable(struct storage_service_aidl_context* self,
-                          struct block_device_tipc* block_devices);
+void storage_aidl_disable(struct storage_service_aidl_context* self);
 
 #else
 
@@ -103,8 +100,7 @@ static inline void storage_aidl_enable(
         struct block_device_tipc* block_devices) {}
 
 static inline void storage_aidl_disable(
-        struct storage_service_aidl_context* self,
-        struct block_device_tipc* block_devices) {}
+        struct storage_service_aidl_context* self) {}
 
 #endif
 
