@@ -461,6 +461,10 @@ public:
     StorageSession(std::shared_ptr<StorageClientSession> session)
             : session_(std::move(session)) {}
 
+    Status stageChangesForCommitOnAbUpdateComplete() final {
+        return Status::fromExceptionCode(Status::EX_UNSUPPORTED_OPERATION);
+    }
+
     Status commitChanges() final { return endTransactions(true); }
     Status abandonChanges() final { return endTransactions(false); }
 
